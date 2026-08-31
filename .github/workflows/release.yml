@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: ./build.sh --test
+
+      - name: Build
+        run: SITE_SRC=none ./build.sh
+
+      - name: Package
+        run: |
+          APP="build/Unofficial driver for Nothing audio devices.app"
+          # Никаких чужих файлов в релизе — та же проверка, что в CI.
+          UNEXPECTED=$(find "$APP/Contents/Resources" -type f ! -name 'AppIcon.icns' ! -name 'shim.js')
+          [ -z "$UNEXPECTED" ] || { echo "в бандле посторонние файлы:"; echo "$UNEXPECTED"; exit 1; }
+          ditto -c -k --keepParent "$APP" "nothing-audio-driver-macos-${GITHUB_REF_NAME}.zip"
+          shasum -a 256 "nothing-audio-driver-macos-${GITHUB_REF_NAME}.zip" > checksums.txt
+          cat checksums.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Built by CI from the tagged source. Ad-hoc signed only — see below.
+
+          ## Installing
+
+          ```bash
+          xattr -d com.apple.quarantine "/Applications/Unofficial driver for Nothing audio devices.app"
+          ```
+
+          macOS refuses to open downloaded apps that are not notarised, so unzip the
+          bundle into `/Applications` and run the command above once. There is no
+          Apple Developer account behind this project and no notarisation.
+
+          ## Two things to expect
+
+          **Bluetooth permission comes back after every update.** This build carries an
+          ad-hoc signature, and macOS ties the permission to the signature hash. If that
+          annoys you, build from source with your own self-signed certificate — the
+          README explains how, and the permission then survives rebuilds.
+
+          **The interface downloads on first launch.** This release bundles no upstream
+          code; the app fetches the interface from https://earweb.bttl.xyz on first run
+          and keeps a local copy for offline use afterwards. Have your headphones
+          connected before the first launch — the identification channel answers only
+          right after connecting.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" \
+            "nothing-audio-driver-macos-${GITHUB_REF_NAME}.zip" checksums.txt \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md
