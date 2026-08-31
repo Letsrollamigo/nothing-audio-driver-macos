@@ -10,6 +10,7 @@
   <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6-FF6A3D.svg" alt="Built with Swift 6"></a>
   <a href="https://github.com/radiance-project/ear-web"><img src="https://img.shields.io/badge/interface-ear%20(web)-6E7686.svg" alt="Interface by the ear (web) project"></a>
   <img src="https://img.shields.io/badge/bundled%20upstream%20code-none-2E7D32.svg" alt="No upstream code is bundled in this repository">
+  <a href="https://github.com/Letsrollamigo/nothing-audio-driver-macos/actions/workflows/build.yml"><img src="https://github.com/Letsrollamigo/nothing-audio-driver-macos/actions/workflows/build.yml/badge.svg" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6E7686.svg" alt="MIT license"></a>
 </p>
 
@@ -40,6 +41,15 @@ This repository adds three files' worth of plumbing and **bundles none of their 
 ## What it is not
 
 It is not a fork, not a mirror, and not a redistribution of ear (web). It adds no device support of its own: if upstream does not support your model, neither does this. It is unsigned by Apple — you build it yourself and sign it with your own certificate.
+
+## Getting it
+
+| Channel | What you get | Trade-off |
+|---|---|---|
+| **[Releases](https://github.com/Letsrollamigo/nothing-audio-driver-macos/releases/latest)** | A ready `.app`, built by CI from tagged source | Ad-hoc signed, so macOS asks for Bluetooth permission again after every update, and the bundle needs `xattr -d com.apple.quarantine` once |
+| **Building from source** | The same app signed with your own certificate | Two minutes of setup — and the Bluetooth permission then survives every rebuild |
+
+Building it yourself is the better experience, and it is genuinely two commands. The release exists for people who just want to try it.
 
 ## Requirements
 
@@ -100,7 +110,7 @@ Architecture and protocol notes: [Documentation/ARCHITECTURE.md](Documentation/A
 
 **Only what upstream supports.** New models arrive when they arrive upstream; this repository adds none.
 
-**No notarised release.** Building and signing locally is the supported path. Downloadable builds would need an Apple Developer account and notarisation, which is not the point of this project.
+**Releases are not notarised.** There is no Apple Developer account behind this project, so a downloaded build needs `xattr -d com.apple.quarantine` once, and its ad-hoc signature makes macOS re-ask for Bluetooth after every update. Building locally with your own certificate avoids both.
 
 ## License
 
