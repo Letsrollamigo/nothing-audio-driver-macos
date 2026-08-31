@@ -33,9 +33,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > notes.md <<'NOTES'
-          Built by CI from the tagged source. Ad-hoc signed only — see below.
-
+          # Первая строка Documentation/RELEASE_NOTES.md — заголовок релиза,
+          # остальное — тело; ниже дописывается неизменная часть про установку.
+          TITLE="$GITHUB_REF_NAME"
+          : > notes.md
+          if [ -f Documentation/RELEASE_NOTES.md ]; then
+            TITLE="$(head -1 Documentation/RELEASE_NOTES.md)"
+            tail -n +2 Documentation/RELEASE_NOTES.md >> notes.md
+            printf '\n---\n\n' >> notes.md
+          fi
+          cat >> notes.md <<'NOTES'
           ## Installing
 
           ```bash
@@ -61,4 +68,4 @@ jobs:
           NOTES
           gh release create "$GITHUB_REF_NAME" \
             "nothing-audio-driver-macos-${GITHUB_REF_NAME}.zip" checksums.txt \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md
+            --title "$TITLE" --notes-file notes.md
