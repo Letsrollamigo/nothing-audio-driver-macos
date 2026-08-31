@@ -9,9 +9,11 @@ cd "$(dirname "$0")"
 MODE="${1:-}"
 
 if [ "$MODE" = "--test" ]; then
-    OUT="$(mktemp -d)/normtest"
-    swiftc -O Sources/SiteUpdater.swift Tests/normalize-test.swift -o "$OUT"
-    exec "$OUT"
+    TMP="$(mktemp -d)"
+    swiftc -O Sources/SiteUpdater.swift Tests/normalize-test.swift -o "$TMP/normalize"
+    swiftc -O Sources/NothingProtocol.swift Tests/protocol-test.swift -o "$TMP/protocol"
+    echo "— нормализация путей"; "$TMP/normalize" || exit 1
+    echo; echo "— протокол на записанных кадрах"; exec "$TMP/protocol"
 fi
 
 # Откуда берём сайт для вшивания: явный SITE_SRC, иначе свежая копия, которую
