@@ -49,8 +49,44 @@ struct ProtocolTest {
         check(NothingProtocol.parseFirmware(firmware) == "1.0.1.81", "прошивка разбирается в строку")
 
         let anc = try! NothingProtocol.decode(bytes("5560011e4006000e0105000204004a7a"))
-        check(NothingProtocol.parseListening(anc)?.mode == .off,
-              "режим прослушивания разбирается", String(describing: NothingProtocol.parseListening(anc)))
+        check(NothingProtocol.parseListening(anc) == .off,
+              "режим прослушивания читается из payload[1]", String(describing: NothingProtocol.parseListening(anc)))
+
+        // Перестановка уровней шумоподавления — ошибка, которую легко не заметить:
+        // проверяем КАЖДОЕ значение провода, а не одно удобное.
+        let wire: [(NothingProtocol.ListeningMode, UInt8)] = [
+            (.ancHigh, 0x01), (.ancMid, 0x02), (.ancLow, 0x03),
+            (.ancAdaptive, 0x04), (.off, 0x05), (.transparency, 0x07),
+        ]
+        for (mode, value) in wire {
+            let encoded = try! NothingProtocol.decode(NothingProtocol.encodeSetANC(mode, operationID: 1))
+            check(encoded.payload == [0x01, value, 0x00],
+                  "запись режима \(mode) даёт 0x\(String(value, radix: 16))",
+                  encoded.payload.map { String($0, radix: 16) }.joined(separator: " "))
+            let readBack = NothingProtocol.Frame(command: 0x401E, operationID: 1, payload: [0x01, value, 0x00, 0x00])
+            check(NothingProtocol.parseListening(readBack) == mode,
+                  "чтение 0x\(String(value, radix: 16)) возвращает \(mode)")
+        }
+
+        // --- детекция в ухе: признак в payload[2], не в payload[0]
+        let inEar = NothingProtocol.Frame(command: 0x400E, operationID: 1, payload: [0x01, 0x01, 0x01])
+        check(NothingProtocol.parseInEarDetection(inEar) == true, "детекция в ухе читается из payload[2]")
+        let inEarOff = NothingProtocol.Frame(command: 0x400E, operationID: 1, payload: [0x01, 0x01, 0x00])
+        check(NothingProtocol.parseInEarDetection(inEarOff) == false, "выключенная детекция читается верно")
+
+        // --- время: big-endian, в отличие от всего остального в протоколе
+        let timeFrame = try! NothingProtocol.decode(
+            NothingProtocol.encodeSetTime(Date(timeIntervalSince1970: 0x6A955E13), operationID: 10))
+        check(timeFrame.payload == [0x6A, 0x95, 0x5E, 0x13],
+              "время кодируется big-endian",
+              timeFrame.payload.map { String($0, radix: 16) }.joined(separator: " "))
+
+        // --- усиление баса: у B170 уровень на проводе вдвое больше показанного
+        let bass = NothingProtocol.Frame(command: 0x404E, operationID: 1, payload: [0x01, 0x06])
+        check(NothingProtocol.parseBassEnhance(bass)?.level == 3, "уровень баса делится на два при чтении")
+        let bassSet = try! NothingProtocol.decode(
+            NothingProtocol.encodeSetBassEnhance(enabled: true, level: 3, operationID: 2))
+        check(bassSet.payload == [0x01, 0x06], "уровень баса умножается на два при записи")
 
         // --- ожидаемый ответ на запрос и на запись
         check(NothingProtocol.Frame(command: 0xC007, operationID: 1).expectedReply == 0x4007,
@@ -80,13 +116,6 @@ struct ProtocolTest {
 
         let noise = bytes("aabbcc") + bytes("55600107400300010106558bb5")
         check(NothingProtocol.split(noise).frames.count == 1, "мусор перед кадром пропускается")
-
-        // --- кодирование записи
-        let toTransparency = NothingProtocol.encodeSetANC(mode: .transparency, strength: nil, operationID: 12)
-        let decoded = try! NothingProtocol.decode(toTransparency)
-        check(decoded.command == 0xF00F && decoded.payload == [0x01, 0x07, 0x00],
-              "переключение в прозрачность кодируется как на проводе",
-              decoded.payload.map { String($0, radix: 16) }.joined(separator: " "))
 
         finish()
     }

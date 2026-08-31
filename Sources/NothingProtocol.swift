@@ -170,37 +170,63 @@ public enum NothingProtocol {
             .trimmingCharacters(in: CharacterSet(charactersIn: "\0 "))
     }
 
-    public struct ListeningState: Equatable {
-        public enum Mode: UInt8 { case noiseCancellation = 1, transparency = 2, off = 5 }
-        public enum Strength: UInt8 { case high = 0, mid = 1, low = 2, adaptive = 3 }
-        public let mode: Mode
-        public let strength: Strength?
+    /// Режим прослушивания. Значение на проводе одно и кодирует и режим, и силу
+    /// шумоподавления сразу — отдельного поля силы в протоколе нет.
+    ///
+    /// Оговорка: часть публичных разборов протокола Nothing для вкладышей
+    /// утверждает обратное для 0x05 и 0x07 (там Transparency и Off меняются
+    /// местами). Здесь взята таблица из драйвера, где чтение и запись
+    /// симметричны. Проверяется за полминуты на живом устройстве: выставить
+    /// прозрачность и прочитать 0xC01E.
+    public enum ListeningMode: UInt8, Equatable, CaseIterable {
+        case ancHigh     = 0x01
+        case ancMid      = 0x02
+        case ancLow      = 0x03
+        case ancAdaptive = 0x04
+        case off         = 0x05
+        case transparency = 0x07
     }
 
-    /// Ответ `0x401E`. Байт 1 — режим, байт 3 — сила шумоподавления;
-    /// сила осмысленна только в режиме шумоподавления.
-    public static func parseListening(_ frame: Frame) -> ListeningState? {
-        guard frame.payload.count >= 4, let mode = ListeningState.Mode(rawValue: frame.payload[1]) else { return nil }
-        let strength = ListeningState.Strength(rawValue: frame.payload[3])
-        return ListeningState(mode: mode, strength: mode == .noiseCancellation ? strength : nil)
+    /// Ответ `0x401E` и push `0xE003`: режим лежит в `payload[1]`, не в `payload[0]`.
+    public static func parseListening(_ frame: Frame) -> ListeningMode? {
+        guard frame.payload.count >= 2 else { return nil }
+        return ListeningMode(rawValue: frame.payload[1])
     }
 
-    /// Запись `0xF00F`. Кодирование уровней взято из наблюдаемого обмена:
-    /// значение режима лежит во втором байте, первый и третий постоянны.
-    public static func encodeSetANC(mode: ListeningState.Mode,
-                                   strength: ListeningState.Strength?,
-                                   operationID: UInt8) -> [UInt8] {
-        let value: UInt8
-        switch (mode, strength) {
-        case (.transparency, _):            value = 0x07
-        case (.off, _):                     value = 0x05
-        case (.noiseCancellation, .high):   value = 0x03
-        case (.noiseCancellation, .mid):    value = 0x01
-        case (.noiseCancellation, .low):    value = 0x02
-        case (.noiseCancellation, _):       value = 0x04     // адаптивный
-        }
-        return encode(Frame(command: Command.setANC.rawValue,
-                            operationID: operationID,
-                            payload: [0x01, value, 0x00]))
+    /// Запись `0xF00F`: `[счётчик записей, режим, 0x00]`.
+    public static func encodeSetANC(_ mode: ListeningMode, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setANC.rawValue,
+                     operationID: operationID,
+                     payload: [0x01, mode.rawValue, 0x00]))
+    }
+
+    /// Ответ `0x400E`: признак лежит в `payload[2]` — симметрично записи
+    /// `0xF004` с payload `[0x01, 0x01, признак]`.
+    public static func parseInEarDetection(_ frame: Frame) -> Bool? {
+        guard frame.payload.count >= 3 else { return nil }
+        return frame.payload[2] != 0
+    }
+
+    /// Запись `0xF00A`: время в секундах эпохи, **big-endian** — в отличие от
+    /// поля команды в заголовке и от чисел в эквалайзере, которые little-endian.
+    public static func encodeSetTime(_ date: Date, operationID: UInt8) -> [UInt8] {
+        let seconds = UInt32(date.timeIntervalSince1970)
+        let payload: [UInt8] = [UInt8(seconds >> 24 & 0xFF), UInt8(seconds >> 16 & 0xFF),
+                                UInt8(seconds >> 8 & 0xFF), UInt8(seconds & 0xFF)]
+        return encode(Frame(command: Command.setUTCTime.rawValue, operationID: operationID, payload: payload))
+    }
+
+    /// Усиление баса, ответ `0x404E` и запись `0xF051`: `[включено, уровень]`.
+    /// У B170 уровень на проводе вдвое больше показанного в интерфейсе;
+    /// трёхступенчатая шкала — только у B189 и B186.
+    public static func parseBassEnhance(_ frame: Frame) -> (enabled: Bool, level: Int)? {
+        guard frame.payload.count >= 2 else { return nil }
+        return (frame.payload[0] != 0, Int(frame.payload[1]) / 2)
+    }
+
+    public static func encodeSetBassEnhance(enabled: Bool, level: Int, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setBassEnhance.rawValue,
+                     operationID: operationID,
+                     payload: [enabled ? 1 : 0, UInt8(max(1, min(5, level)) * 2)]))
     }
 }
