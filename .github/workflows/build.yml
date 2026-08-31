@@ -1,0 +1,33 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Path normalisation test
+        run: ./build.sh --test
+
+      - name: Build without a bundled interface
+        run: SITE_SRC=none ./build.sh
+
+      # Спасает от главной ошибки этого репозитория: случайно вшить чужие файлы.
+      - name: Assert no upstream code is bundled
+        run: |
+          APP="build/Unofficial driver for Nothing audio devices.app"
+          test -d "$APP" || { echo "бандл не собрался"; exit 1; }
+          UNEXPECTED=$(find "$APP/Contents/Resources" -type f ! -name 'AppIcon.icns' ! -name 'shim.js')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "в бандле посторонние файлы:"; echo "$UNEXPECTED"; exit 1
+          fi
+          echo "в бандле только своё"
+
+      - name: Icon generator still runs
+        run: swift Tools/make-icon.swift "$RUNNER_TEMP/icon.png"
