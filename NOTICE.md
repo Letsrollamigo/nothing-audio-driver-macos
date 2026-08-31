@@ -10,12 +10,17 @@ Licensed under the GNU Affero General Public License v3.0; see LICENSE.
 This project is **not** a fork of, and **does not redistribute**, the
 [ear (web)](https://github.com/radiance-project/ear-web) project.
 
-All device knowledge lives upstream: the wire protocol, the per-model
-configuration, the firmware gating and the entire user interface are the work of
-the ear (web) authors, published under AGPL-3.0 and deployed at
-<https://earweb.bttl.xyz>. This repository contributes exactly three things —
-a macOS window, a Bluetooth RFCOMM bridge, and a `navigator.serial` shim — and
-ships **no upstream files whatsoever**.
+The entire user interface is the work of the ear (web) authors, published under
+AGPL-3.0 and deployed at <https://earweb.bttl.xyz>. This repository ships **no
+upstream files whatsoever** and mirrors nothing from them.
+
+What it contributes is a macOS window, a Bluetooth RFCOMM bridge, a
+`navigator.serial` shim, and — growing alongside those — a native protocol layer:
+a frame codec, and a table of which commands each device model accepts. That
+table is this project's own work in its structure and its wording, but the
+knowledge in it was derived by reading upstream's source; a part of it has since
+been checked against hardware, and the table records which part. See "Why
+AGPL-3.0" below.
 
 The interface is fetched at runtime from the authors' own deployment, on the
 user's machine, by the user's own copy of the app. Nothing is mirrored into this

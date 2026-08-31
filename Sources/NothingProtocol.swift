@@ -112,7 +112,7 @@ public enum NothingProtocol {
 
     // MARK: - Команды, доступные B170
 
-    public enum Command: UInt16 {
+    public enum Command: UInt16, CaseIterable {
         case battery              = 0xC007
         case anc                  = 0xC01E
         case equaliser            = 0xC01F

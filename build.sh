@@ -11,7 +11,7 @@ MODE="${1:-}"
 if [ "$MODE" = "--test" ]; then
     TMP="$(mktemp -d)"
     swiftc -O Sources/SiteUpdater.swift Tests/normalize-test.swift -o "$TMP/normalize"
-    swiftc -O Sources/NothingProtocol.swift Tests/protocol-test.swift -o "$TMP/protocol"
+    swiftc -O Sources/NothingProtocol.swift Sources/NothingCatalog.swift Tests/protocol-test.swift -o "$TMP/protocol"
     echo "— нормализация путей"; "$TMP/normalize" || exit 1
     echo; echo "— протокол на записанных кадрах"; exec "$TMP/protocol"
 fi
