@@ -68,11 +68,26 @@ struct ProtocolTest {
                   "чтение 0x\(String(value, radix: 16)) возвращает \(mode)")
         }
 
-        // --- детекция в ухе: признак в payload[2], не в payload[0]
-        let inEar = NothingProtocol.Frame(command: 0x400E, operationID: 1, payload: [0x01, 0x01, 0x01])
-        check(NothingProtocol.parseInEarDetection(inEar) == true, "детекция в ухе читается из payload[2]")
-        let inEarOff = NothingProtocol.Frame(command: 0x400E, operationID: 1, payload: [0x01, 0x01, 0x00])
-        check(NothingProtocol.parseInEarDetection(inEarOff) == false, "выключенная детекция читается верно")
+        // --- блок настроек: кадр, снятый с устройства
+        let settingsFrame = NothingProtocol.Frame(
+            command: 0x400E, operationID: 1,
+            payload: bytes("0901010201070109010a010b000e0112011501"))
+        let settings = NothingProtocol.parseSettings(settingsFrame)
+        check(settings.count == 9, "блок настроек разбирается на девять записей", "\(settings.count)")
+        check(settings[0x01] == 1, "детекция в ухе включена")
+        check(settings[0x0b] == 0, "выключенная настройка читается как ноль")
+        check(NothingProtocol.parseInEarDetection(settingsFrame) == true,
+              "детекция ищется по идентификатору, а не по смещению")
+
+        // Перестановка записей не должна ломать разбор — их парсер такое ломает.
+        let reordered = NothingProtocol.Frame(command: 0x400E, operationID: 1,
+                                              payload: [0x02, 0x0b, 0x00, 0x01, 0x01])
+        check(NothingProtocol.parseInEarDetection(reordered) == true,
+              "порядок записей в блоке настроек не важен")
+
+        // --- пресет эквалайзера, снят с устройства
+        let eq = NothingProtocol.Frame(command: 0x401F, operationID: 1, payload: [0x00])
+        check(NothingProtocol.parseEqualiser(eq) == .balanced, "пресет эквалайзера разбирается")
 
         // --- время: big-endian, в отличие от всего остального в протоколе
         let timeFrame = try! NothingProtocol.decode(

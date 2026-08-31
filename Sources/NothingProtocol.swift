@@ -200,11 +200,41 @@ public enum NothingProtocol {
                      payload: [0x01, mode.rawValue, 0x00]))
     }
 
-    /// Ответ `0x400E`: признак лежит в `payload[2]` — симметрично записи
-    /// `0xF004` с payload `[0x01, 0x01, признак]`.
+    /// Ответ `0x400E` — не одиночный признак, а блок настроек:
+    /// `[количество][идентификатор, значение] × N`. Драйвер-донор читает
+    /// фиксированное смещение `payload[2]`, то есть значение первой пары,
+    /// полагаясь на порядок; разбираем по идентификаторам.
+    public static func parseSettings(_ frame: Frame) -> [UInt8: UInt8] {
+        guard let count = frame.payload.first else { return [:] }
+        var result = [UInt8: UInt8]()
+        for i in 0..<Int(count) {
+            let base = 1 + i * 2
+            guard base + 1 < frame.payload.count else { break }
+            result[frame.payload[base]] = frame.payload[base + 1]
+        }
+        return result
+    }
+
+    /// Идентификаторы внутри блока настроек `0x400E`. Названы те, что удалось
+    /// сопоставить с интерфейсом; остальные читаются, но пока без имени.
+    public enum Setting: UInt8 { case inEarDetection = 0x01 }
+
     public static func parseInEarDetection(_ frame: Frame) -> Bool? {
-        guard frame.payload.count >= 3 else { return nil }
-        return frame.payload[2] != 0
+        parseSettings(frame)[Setting.inEarDetection.rawValue].map { $0 != 0 }
+    }
+
+    /// Пресет эквалайзера, ответ `0x401F`.
+    public enum EqualiserPreset: UInt8 { case balanced = 0, voice = 1, treble = 2, bass = 3, custom = 5 }
+
+    public static func parseEqualiser(_ frame: Frame) -> EqualiserPreset? {
+        frame.payload.first.flatMap(EqualiserPreset.init(rawValue:))
+    }
+
+    /// Ответы, состоящие из одного значения: `0x4041` задержка, `0x404C`
+    /// продвинутый эквалайзер, `0x405A` персональный звук, `0x4027` две пары,
+    /// `0x4029` кодек, `0x404F` пространственный звук (два байта, значим первый).
+    public static func parseSingleValue(_ frame: Frame) -> UInt8? {
+        frame.payload.first
     }
 
     /// Запись `0xF00A`: время в секундах эпохи, **big-endian** — в отличие от
