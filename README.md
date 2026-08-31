@@ -11,7 +11,7 @@
   <a href="https://github.com/radiance-project/ear-web"><img src="https://img.shields.io/badge/interface-ear%20(web)-6E7686.svg" alt="Interface by the ear (web) project"></a>
   <img src="https://img.shields.io/badge/bundled%20upstream%20code-none-2E7D32.svg" alt="No upstream code is bundled in this repository">
   <a href="https://github.com/Letsrollamigo/nothing-audio-driver-macos/actions/workflows/build.yml"><img src="https://github.com/Letsrollamigo/nothing-audio-driver-macos/actions/workflows/build.yml/badge.svg" alt="CI status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6E7686.svg" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-6E7686.svg" alt="AGPL-3.0 license"></a>
 </p>
 
 **Unofficial driver for Nothing audio devices** is a native macOS application for controlling Nothing and CMF headphones — noise cancellation, equaliser, gestures, battery, firmware info — without a browser.
@@ -114,6 +114,8 @@ Architecture and protocol notes: [Documentation/ARCHITECTURE.md](Documentation/A
 
 ## License
 
-[MIT](LICENSE) for everything in this repository. See [NOTICE.md](NOTICE.md) for the relationship to ear (web), which is a separate work under AGPL-3.0.
+[AGPL-3.0](LICENSE), the same licence as [ear (web)](https://github.com/radiance-project/ear-web).
+
+That is a deliberate choice rather than an inherited obligation. This repository ships none of their code, so nothing compelled it — but the protocol knowledge behind the native layer was derived from their AGPL-licensed source, and matching their licence is the honest answer to that. See [NOTICE.md](NOTICE.md).
 
 Nothing and CMF are trademarks of Nothing Technology Limited. This project is unofficial and unaffiliated.

@@ -3,7 +3,7 @@
 Unofficial driver for Nothing audio devices
 
 Copyright (c) 2026 Letsrollamigo <arsenyolear@gmail.com>
-Licensed under the MIT License; see LICENSE.
+Licensed under the GNU Affero General Public License v3.0; see LICENSE.
 
 ## Relationship to ear (web)
 
@@ -28,6 +28,19 @@ recognised, an equaliser band is wrong — that belongs upstream:
 this repository cannot fix it, and noise on their tracker helps nobody.
 Issues here should be about the macOS shell: the bridge, the window, signing,
 permissions, the updater.
+
+## Why AGPL-3.0
+
+Nothing here obliged it. This repository ships no upstream code, and the shell,
+the bridge and the shim are original work that could have carried any licence.
+
+The native protocol layer is a different matter. Its knowledge — opcodes, payload
+shapes, the meaning of each value — was derived by reading the AGPL-3.0 source of
+ear (web), and then verified against real hardware. Protocol facts are not
+themselves copyrightable, and the verification is genuine: several formats turned
+out to be documented wrongly and were corrected by listening to the device rather
+than by trusting the source. But the starting point was their work, and matching
+their licence is the honest way to say so.
 
 ## Trademarks
 
