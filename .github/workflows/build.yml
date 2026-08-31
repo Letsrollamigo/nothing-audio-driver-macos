@@ -29,5 +29,19 @@ jobs:
           fi
           echo "в бандле только своё"
 
+      - name: Assert the binary is universal
+        run: |
+          APP="build/Unofficial driver for Nothing audio devices.app"
+          ARCHS=$(lipo -archs "$APP/Contents/MacOS/ear-local")
+          echo "срезы: $ARCHS"
+          case "$ARCHS" in
+            *arm64*) ;;
+            *) echo "нет среза arm64"; exit 1 ;;
+          esac
+          case "$ARCHS" in
+            *x86_64*) ;;
+            *) echo "нет среза x86_64 — на Intel не запустится"; exit 1 ;;
+          esac
+
       - name: Icon generator still runs
         run: swift Tools/make-icon.swift "$RUNNER_TEMP/icon.png"

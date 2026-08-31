@@ -59,7 +59,21 @@ if [ -n "$SITE_SRC" ]; then
     find "$APP/Contents/Resources/site" -name '._*' -delete
 fi
 
-swiftc -O Sources/SiteUpdater.swift Sources/main.swift -o "$APP/Contents/MacOS/ear-local"
+# Универсальный бинарник: нативно на Apple Silicon и работает на Intel.
+# swiftc не умеет собирать «толстый» файл сам — компилируем под каждую
+# архитектуру и склеиваем.
+SLICES=()          # массив, а не строка: в путях есть пробелы
+for ARCH in arm64 x86_64; do
+    OUT="$APP/Contents/MacOS/ear-local.$ARCH"
+    if swiftc -O -target "$ARCH-apple-macos13.0" Sources/SiteUpdater.swift Sources/main.swift -o "$OUT" 2>/dev/null; then
+        SLICES+=("$OUT")
+    else
+        echo "срез $ARCH собрать не удалось, пропускаю" >&2
+    fi
+done
+[ ${#SLICES[@]} -gt 0 ] || { echo "не собралось ни под одну архитектуру" >&2; exit 1; }
+lipo -create -output "$APP/Contents/MacOS/ear-local" "${SLICES[@]}"
+rm -f "${SLICES[@]}"
 codesign --force --deep -s "$CODESIGN_ID" "$APP" >/dev/null 2>&1
 
 echo "готово: $APP ($(du -sh "$APP" | cut -f1)), подпись: $CODESIGN_ID"
