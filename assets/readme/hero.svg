@@ -1,16 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img"
      aria-label="Unofficial driver for Nothing audio devices — a native macOS shell that gives the ear (web) driver a real Bluetooth transport.">
   <rect width="1200" height="300" rx="18" fill="#211f1e"/>
-  <g transform="translate(96 150)" fill="none" stroke="#efefec" stroke-width="11" stroke-linecap="round">
+  <g transform="translate(105 140)" fill="none" stroke="#efefec" stroke-width="11" stroke-linecap="round">
     <path d="M-52 8 A 52 52 0 0 1 52 8"/>
   </g>
   <g fill="#efefec">
-    <rect x="38" y="152" width="20" height="42" rx="10"/>
-    <rect x="134" y="152" width="20" height="42" rx="10"/>
+    <rect x="47" y="142" width="20" height="42" rx="10"/>
+    <rect x="143" y="142" width="20" height="42" rx="10"/>
   </g>
-  <circle cx="96" cy="214" r="7" fill="#d94f28"/>
-  <text x="210" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="40" fill="#efefec">Unofficial driver for Nothing audio devices</text>
-  <text x="210" y="180" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="23" fill="#9b9894">A native macOS shell that gives the ear (web) driver a real Bluetooth transport.</text>
-  <text x="210" y="216" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="23" fill="#9b9894">Web Serial does not exist in WebKit — so the app brings its own.</text>
-  <text x="210" y="256" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#6f6c68">Swift · WKWebView · IOBluetooth RFCOMM · no upstream code bundled</text>
+  <circle cx="105" cy="206" r="7" fill="#d94f28"/>
+  <text x="210" y="112" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="38" fill="#efefec" textLength="400" lengthAdjust="spacingAndGlyphs">Unofficial driver</text>
+  <text x="210" y="158" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="38" fill="#efefec" textLength="588" lengthAdjust="spacingAndGlyphs">for Nothing audio devices</text>
+  <text x="210" y="204" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="22" fill="#9b9894" textLength="740" lengthAdjust="spacingAndGlyphs">A native macOS shell that gives the ear (web) driver a real Bluetooth</text>
+  <text x="210" y="234" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="22" fill="#9b9894" textLength="800" lengthAdjust="spacingAndGlyphs">transport — Web Serial does not exist in WebKit, so the app brings its own.</text>
+  <text x="210" y="270" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#6f6c68" textLength="650" lengthAdjust="spacingAndGlyphs">Swift · WKWebView · IOBluetooth RFCOMM · no upstream code bundled</text>
 </svg>
