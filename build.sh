@@ -65,7 +65,10 @@ fi
 SLICES=()          # массив, а не строка: в путях есть пробелы
 for ARCH in arm64 x86_64; do
     OUT="$APP/Contents/MacOS/ear-local.$ARCH"
-    if swiftc -O -target "$ARCH-apple-macos13.0" Sources/SiteUpdater.swift Sources/main.swift -o "$OUT" 2>/dev/null; then
+    if swiftc -O -target "$ARCH-apple-macos13.0" Sources/SiteUpdater.swift \
+        Sources/NothingProtocol.swift Sources/NothingCatalog.swift \
+        Sources/NativeScreen.swift \
+        Sources/main.swift -o "$OUT" 2>/dev/null; then
         SLICES+=("$OUT")
     else
         echo "срез $ARCH собрать не удалось, пропускаю" >&2

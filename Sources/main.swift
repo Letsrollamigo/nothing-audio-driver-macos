@@ -16,6 +16,22 @@ func trace(_ s: String) {
 }
 let SCHEME = "earlocal"
 
+func hexString(_ bytes: [UInt8]) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
+
+func hexBytes(_ hex: String) -> [UInt8] {
+    stride(from: 0, to: hex.count, by: 2).map { i -> UInt8 in
+        let idx = hex.index(hex.startIndex, offsetBy: i)
+        return UInt8(hex[idx...hex.index(idx, offsetBy: 1)], radix: 16) ?? 0
+    }
+}
+
+/// Строка, пригодная для вставки в JS. Нужна только оболочке: мост про веб
+/// не знает и отдаёт причину обычной строкой.
+func jsString(_ s: String) -> String {
+    let escaped = s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+    return "'\(escaped)'"
+}
+
 // MARK: - раздача сайта из бандла
 
 final class SiteHandler: NSObject, WKURLSchemeHandler {
@@ -72,7 +88,18 @@ final class SiteHandler: NSObject, WKURLSchemeHandler {
 // MARK: - мост к наушникам по RFCOMM
 
 final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
-    weak var webView: WKWebView?
+    /// Куда уходят события канала. Мост не знает, кто на той стороне: сегодня
+    /// это чужой сайт в `WKWebView`, завтра — нативные экраны. Кадры отдаются
+    /// байтами, а не гексом: гекс нужен только шиму, пусть он его и делает.
+    var onOpened: (_ ok: Bool, _ reason: String) -> Void = { _, _ in }
+    var onReceive: (_ frame: [UInt8]) -> Void = { _ in }
+    var onClosed: () -> Void = {}
+
+    /// Имя и адрес устройства, к которому открыт канал. Имя показывается как
+    /// есть, а по адресу лежит кэш опознания — по нему узнаётся модель и цвет.
+    private(set) var deviceName: String?
+    private(set) var deviceAddress: String?
+
     private var channel: IOBluetoothRFCOMMChannel?
     private var opening = false
     private var isOpen = false                 // канал ГОТОВ, а не просто создан
@@ -82,15 +109,13 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private var reconnecting = false           // восстановление после обрыва, а не запрос сайта
     private var inbox = [UInt8]()              // склейка входящего потока в кадры
 
-    private func js(_ script: String) {
-        DispatchQueue.main.async { self.webView?.evaluateJavaScript(script) }
-    }
+    // Все три события уходят через одну очередь: порядок доставки держится
+    // на этом, а не на том, из какого потока пришёл колбэк IOBluetooth.
     private func opened(_ ok: Bool, _ reason: String = "") {
-        js("window.__serialOpened(\(ok), \(jsString(reason)))")
+        DispatchQueue.main.async { self.onOpened(ok, reason) }
     }
-    private func jsString(_ s: String) -> String {
-        let escaped = s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
-        return "'\(escaped)'"
+    private func received(_ frame: [UInt8]) {
+        DispatchQueue.main.async { self.onReceive(frame) }
     }
 
     func open(uuidString: String, retry: Bool = true) {
@@ -125,6 +150,8 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             if rc == kIOReturnSuccess {
                 channel = ch
                 opening = true
+                deviceName = device.name
+                deviceAddress = device.addressString
                 // Канал опознания устройство отдаёт только сразу после подключения:
                 // если молчит — подставляем сохранённый ответ прошлого раза.
                 if uuidString == FASTPAIR_UUID { scheduleFastpairFallback(address: device.addressString ?? "?") }
@@ -161,7 +188,7 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             }
             trace("FastPair: канал молчит, подставляю сохранённое опознание \(hex)")
             self.opened(true)
-            self.js("window.__serialRecv('\(hex)')")
+            self.received(hexBytes(hex))
         }
     }
 
@@ -181,14 +208,13 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private func notifyClosed() {
         reconnecting = false
         outbox.removeAll()
-        js("window.__serialClosed && window.__serialClosed()")
+        DispatchQueue.main.async { self.onClosed() }
     }
 
-    func write(hex: String) {
-        let bytes = stride(from: 0, to: hex.count, by: 2).map { i -> UInt8 in
-            let idx = hex.index(hex.startIndex, offsetBy: i)
-            return UInt8(hex[idx...hex.index(idx, offsetBy: 1)], radix: 16) ?? 0
-        }
+    /// Шим шлёт гекс — разбираем на границе и дальше живём байтами.
+    func write(hex: String) { write(hexBytes(hex)) }
+
+    func write(_ bytes: [UInt8]) {
         guard isOpen, let ch = channel else {
             // Устройство закрывает канал на простое: копим кадр и переоткрываем.
             trace("write: канал закрыт, ставлю кадр в очередь и переподключаюсь")
@@ -268,13 +294,13 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         // Кэшируем ТОЛЬКО отсюда — на канале управления семибайтным бывает хвост
         // недособранного кадра, и он однажды затёр кэш мусором.
         if lastUUID == FASTPAIR_UUID {
-            let hex = bytes.map { String(format: "%02x", $0) }.joined()
+            let hex = hexString(bytes)
             trace("← опознание \(hex)")
             if length == 7, let addr = ch?.getDevice()?.addressString {
                 UserDefaults.standard.set(hex, forKey: "fastpair-\(addr)")
                 trace("опознание сохранено для \(addr)")
             }
-            js("window.__serialRecv('\(hex)')")
+            received(bytes)
             return
         }
 
@@ -287,9 +313,8 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             guard inbox.count >= total else { break }
             let frame = Array(inbox.prefix(total))
             inbox.removeFirst(total)
-            let hex = frame.map { String(format: "%02x", $0) }.joined()
-            trace("← \(hex)")
-            js("window.__serialRecv('\(hex)')")
+            trace("← \(hexString(frame))")
+            received(frame)
         }
     }
 
@@ -307,7 +332,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var webView: WKWebView!
     let bridge = SerialBridge()
 
+    var native: NativeWindow?
+
     func applicationDidFinishLaunching(_ note: Notification) {
+        // Нативный экран растёт рядом с оболочкой: обычный запуск идёт как
+        // раньше, флаг открывает пробный экран вместо чужого сайта.
+        if CommandLine.arguments.contains("--native") {
+            trace("=== старт: нативный экран ===")
+            // Тему система переключает глобально, а смотреть надо обе.
+            // Отладочный флаг, как --selftest; в обычном запуске приложение
+            // следует системе и ничего не навязывает.
+            if CommandLine.arguments.contains("--dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+            if CommandLine.arguments.contains("--light") { NSApp.appearance = NSAppearance(named: .aqua) }
+            native = NativeWindow()
+            native?.show()
+            return
+        }
         trace("=== старт ===")
         let res = Bundle.main.resourceURL!
         let shim = (try? String(contentsOf: res.appendingPathComponent("shim.js"), encoding: .utf8)) ?? ""
@@ -334,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         webView = WKWebView(frame: window.contentLayoutRect, configuration: cfg)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
-        bridge.webView = webView
+        wireBridgeToSite()
         window.contentView = webView
         if SiteStore.activeSite() != nil {
             webView.load(URLRequest(url: URL(string: "\(SCHEME)://site/index.html?debug=1")!))
@@ -353,6 +393,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if pruned > 0 { trace("старт: убрано лишних каталогов \(pruned)") }
         trace("старт: активна \(SiteStore.activeLabel())")
         checkForSiteUpdate()
+    }
+
+    /// Перевод событий моста в вызовы шима. Единственное место, где транспорт
+    /// встречается с вебом; нативным экранам понадобится свой такой же.
+    private func wireBridgeToSite() {
+        bridge.onOpened = { [weak self] ok, reason in
+            self?.webView.evaluateJavaScript("window.__serialOpened(\(ok), \(jsString(reason)))")
+        }
+        bridge.onReceive = { [weak self] frame in
+            self?.webView.evaluateJavaScript("window.__serialRecv('\(hexString(frame))')")
+        }
+        bridge.onClosed = { [weak self] in
+            self?.webView.evaluateJavaScript("window.__serialClosed && window.__serialClosed()")
+        }
     }
 
     private func titleText() -> String {
