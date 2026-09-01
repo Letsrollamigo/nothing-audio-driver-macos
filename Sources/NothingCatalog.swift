@@ -15,15 +15,20 @@ import Foundation
 
 public enum NothingCatalog {
 
-    /// Откуда взято знание о команде. Физически доступна одна модель, B170,
-    /// поэтому провод подтверждает только её; всё прочее выведено чтением
-    /// чужого кода и может оказаться неверным.
+    /// Откуда взято знание. Физически доступна одна модель, B170, поэтому
+    /// провод подтверждает только её; всё прочее выведено чтением чужого
+    /// кода и может оказаться неверным.
     public enum Evidence: String {
         /// Спрошено у B170 и получен ответ.
         case wire
         /// Спрошено у B170 и ответа не было. Неподдерживаемое устройство
         /// молчит, а не отвечает отказом, — это сильнее догадки по конфигу.
         case silent
+        /// Два независимых источника в чужом проекте сказали одно и то же:
+        /// конфиг устройства и разметка страницы модели. Устройства нет,
+        /// но и списать это на опечатку в одном месте уже нельзя. Бывает
+        /// только у раскладки жестов — у команд второго источника нет.
+        case crossChecked
         /// Не проверялось. Выведено из кода донора.
         case derived
     }
@@ -140,12 +145,12 @@ public enum NothingCatalog {
         .init(code: 0xE00E, name: "dualDeviceEvent", role: .push, requires: .always, evidence: .derived),
         .init(code: 0xE019, name: "audiodoStatusPush", role: .push, requires: .flag(.audiodo), evidence: .derived),
         .init(code: 0xF002, name: "ringDevice", role: .write, requires: .always, evidence: .derived),
-        .init(code: 0xF003, name: "gestures", role: .write, requires: .always, evidence: .derived),
+        .init(code: 0xF003, name: "gestures", role: .write, requires: .always, evidence: .wire),
         .init(code: 0xF004, name: "inEar", role: .write, requires: .exceptModels(["B174", "B175", "B185", "B186", "B189"]), evidence: .derived),
         .init(code: 0xF00A, name: "utcTime", role: .write, requires: .exceptModels(["B181"]), evidence: .wire),
         .init(code: 0xF00D, name: "ledCaseColor", role: .write, requires: .onlyModels(["B181"]), evidence: .derived),
         .init(code: 0xF00F, name: "anc", role: .write, requires: .always, evidence: .derived),
-        .init(code: 0xF010, name: "eq", role: .write, requires: .exceptModels(["B168", "B172", "B175", "B179", "B184", "B185", "B189"]), evidence: .derived),
+        .init(code: 0xF010, name: "eq", role: .write, requires: .exceptModels(["B168", "B172", "B175", "B179", "B184", "B185", "B189"]), evidence: .wire),
         .init(code: 0xF011, name: "personalizedANC", role: .write, requires: .onlyModels(["B155"]), evidence: .derived),
         .init(code: 0xF014, name: "earFitTest", role: .write, requires: .onlyModels(["B155", "B162", "B171", "B172", "B173", "B179", "B184"]), evidence: .derived),
         .init(code: 0xF015, name: "mimiEnable", role: .write, requires: .flag(.mimi), evidence: .derived),
@@ -156,7 +161,7 @@ public enum NothingCatalog {
         .init(code: 0xF040, name: "latency", role: .write, requires: .always, evidence: .derived),
         .init(code: 0xF041, name: "customEQ", role: .write, requires: .exceptModels(["B181"]), evidence: .derived),
         .init(code: 0xF04F, name: "advancedEQEnabled", role: .write, requires: .always, evidence: .derived),
-        .init(code: 0xF050, name: "advancedEQValue", role: .write, requires: .always, evidence: .derived),
+        .init(code: 0xF050, name: "advancedEQValue", role: .write, requires: .always, evidence: .wire),
         .init(code: 0xF051, name: "enhancedBass", role: .write, requires: .onlyModels(["B162", "B164", "B168", "B170", "B171", "B172", "B173", "B179", "B184", "B186", "B189"]), evidence: .derived),
         .init(code: 0xF052, name: "spatialAudio", role: .write, requires: .flag(.spatialAudio), evidence: .derived),
         .init(code: 0xF05C, name: "audiodoProfileOn", role: .write, requires: .flag(.audiodo), evidence: .derived),
@@ -173,6 +178,75 @@ public enum NothingCatalog {
 
     // MARK: - Модели
 
+    /// Физический жест. Номера протокольные, имена наши.
+    public enum GestureKind: UInt8 {
+        case singlePress = 1
+        case doublePress = 2
+        case triplePress = 3
+        case slide = 5
+        case pressHold = 7
+        case doublePressHold = 9
+        case rotate = 10
+        case pinchBoth = 11
+    }
+
+    /// Действие, которое можно повесить на жест. Номера протокольные.
+    ///
+    /// Кодов 20, 21 и 22 здесь нет намеренно: это то же `noiseControl`, но с
+    /// одним режимом, выброшенным из круга. Состав круга разбирает
+    /// `NothingProtocol.noiseCycle`, а сюда такое значение приводит
+    /// инициализатор `init(wire:)` — без него разбор реального ответа
+    /// спотыкается на первом же устройстве: у B170 колесо стоит именно в 22.
+    public enum GestureAction: UInt8 {
+        case noAction = 1
+        case playPause = 2
+        case answerCall = 3
+        case skipBack = 8
+        case skipForward = 9
+        case noiseControl = 10
+        case voiceAssistant = 11
+        case lowLagMode = 17
+        case volumeUp = 18
+        case volumeDown = 19
+        case volumeControl = 23
+        case cameraShutter = 24
+        case answerCallAndMute = 25
+        case hangUp = 26
+        case spatialAudio = 27
+        case micMute = 29
+        case news = 31
+        case radio = 32
+        case essentialSpace = 33
+        case eqPreset = 34
+        case ultraBass = 35
+        case trebleEnhance = 36
+        case recording = 37
+
+        /// Действие, пришедшее с провода.
+        public init?(wire raw: UInt8) {
+            self.init(rawValue: (20...22).contains(raw) ? 10 : raw)
+        }
+    }
+
+    /// Одна строка раскладки: что на этом устройстве, этой кнопке и этом жесте
+    /// вообще можно выбрать. Ровно те четыре байта, которыми обмениваются
+    /// `0x4018` и `0xF003`, плюс список допустимого.
+    public struct GestureSlot {
+        /// 2 и 3 — левый и правый вкладыш, 4 — циферблат корпуса,
+        /// 6 — наушники целиком. Конфиг перечисляет у вкладышей только 2;
+        /// вторую сторону подтверждает топология JS и провод.
+        public let device: UInt8
+        public let button: UInt8
+        public let gesture: GestureKind
+        public let actions: [GestureAction]
+        /// Значение с завода. У донора рядом лежат ещё варианты для телефона
+        /// Nothing и для каждой стороны отдельно — их не переносим: на macOS
+        /// первый бессмыслен, а вторые нужны интерфейсу, а не протоколу.
+        public let defaultAction: GestureAction?
+        public let evidence: Evidence
+    }
+
+
     /// Полоса прошивок: набор возможностей действует не для модели целиком,
     /// а для диапазона версий. У B170, например, персональный звук появился
     /// только с *.*.1.75 — на более старой прошивке команды просто нет.
@@ -180,95 +254,522 @@ public enum NothingCatalog {
         public let minFirmware: String?
         public let maxFirmware: String?
         public let flags: [Flag: Int]
+        /// Раскладка жестов той же полосы. Полоса одна на оба: и флаги,
+        /// и жесты читаются из одной записи конфига. Единственная модель,
+        /// у которой они по полосам расходятся, — B157: шумоподавление
+        /// в жестах есть только на полосе от *.*.2.0.
+        public let gestures: [GestureSlot]
     }
+
+    /// Профиль звучания — то, чем управляют семь моделей вместо пресетов
+    /// эквалайзера. Команда `0xF01D`; у донора она зовётся `setListeningMode`,
+    /// и это не тот «режим прослушивания», что в `NothingProtocol.ListeningMode`
+    /// — там шумоподавление. Название в чужом коде занято дважды, у нас нет.
+    ///
+    /// `dirac` и `diracOpteo` — не опечатка: у B185 профиль Dirac стоит в 7,
+    /// у остальных Dirac OPTEO в 0, и подписи у них тоже разные.
+    public enum SoundProfile: UInt8 {
+        case diracOpteo = 0
+        case rock = 1
+        case electronic = 2
+        case pop = 3
+        case vocals = 4
+        case classical = 5
+        case custom = 6
+        case dirac = 7
+    }
+
+    /// Чем модель управляет звучанием. Наборы дополняют друг друга: ни одна
+    /// модель не знает оба.
+    public enum SoundStyle: Equatable {
+        /// Пресеты эквалайзера, команда `0xF01F`.
+        case presets([NothingProtocol.EqualiserPreset])
+        /// Профили звучания, команда `0xF01D`.
+        case profiles([SoundProfile])
+        /// Ни того, ни другого. Так вышло у одной модели, B187: конфиг
+        /// объявляет ноль пресетов, а в жёсткий список моделей с профилями
+        /// её не внесли. Своей страницы у неё нет, достижима она только как
+        /// altBase и тогда работает под номером базы. Подставить сюда набор
+        /// базы было бы наследованием по альтернативе — тем самым, из-за
+        /// которого не читается supportId.
+        case neither
+    }
+
 
     public struct Model {
         public let id: String
         public let bands: [Band]
+        /// Пресеты или профили. Полосой прошивки не управляется: набор
+        /// кнопок задан разметкой страницы, а она у модели одна.
+        public let sound: SoundStyle
     }
 
     /// 23 моделей.
     public static let models: [Model] = [
         .init(id: "B181", bands: [
-            .init(minFirmware: nil, maxFirmware: "*.*.1.74", flags: [.ancLevel: 53, .buttonPosition: 4, .dualConnection: 0, .eq: 15, .findDevice: 1, .lowLagMode: 0, .serialNumber: 0, .utcTime: 0]),
-            .init(minFirmware: "*.*.1.75", maxFirmware: "*.*.1.85", flags: [.ancLevel: 53, .buttonPosition: 4, .dualConnection: 0, .eq: 15, .findDevice: 1, .serialNumber: 0, .utcTime: 0]),
-            .init(minFirmware: "*.*.1.86", maxFirmware: nil, flags: [.ancLevel: 53, .buttonPosition: 4, .dualConnection: 0, .eq: 15, .findDevice: 1, .serialNumber: 0, .utcTime: 0]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: "*.*.1.74", flags: [.ancLevel: 53, .buttonPosition: 4, .dualConnection: 0, .eq: 15, .findDevice: 1, .lowLagMode: 0, .serialNumber: 0, .utcTime: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "*.*.1.75", maxFirmware: "*.*.1.85", flags: [.ancLevel: 53, .buttonPosition: 4, .dualConnection: 0, .eq: 15, .findDevice: 1, .serialNumber: 0, .utcTime: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "*.*.1.86", maxFirmware: nil, flags: [.ancLevel: 53, .buttonPosition: 4, .dualConnection: 0, .eq: 15, .findDevice: 1, .serialNumber: 0, .utcTime: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass])),
         .init(id: "B157", bands: [
-            .init(minFirmware: "*.*.2.0", maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -11, .ancLevel: 33, .buttonPosition: 4, .dualConnection: 0, .noiseReduction: 1]),
-            .init(minFirmware: nil, maxFirmware: "*.*.1.79", flags: [.ancLevel: 0, .buttonPosition: 4, .dualConnection: 0, .noiseReduction: 2]),
-            .init(minFirmware: "*.*.1.80", maxFirmware: "*.*.1.999", flags: [.advancedEq: 1, .advancedEqTotalGain: -11, .ancLevel: 0, .buttonPosition: 4, .dualConnection: 0, .noiseReduction: 2]),
-        ]),
+            .init(minFirmware: "*.*.2.0", maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -11, .ancLevel: 33, .buttonPosition: 4, .dualConnection: 0, .noiseReduction: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: nil, maxFirmware: "*.*.1.79", flags: [.ancLevel: 0, .buttonPosition: 4, .dualConnection: 0, .noiseReduction: 2], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "*.*.1.80", maxFirmware: "*.*.1.999", flags: [.advancedEq: 1, .advancedEqTotalGain: -11, .ancLevel: 0, .buttonPosition: 4, .dualConnection: 0, .noiseReduction: 2], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B155", bands: [
-            .init(minFirmware: nil, maxFirmware: "*.*.1.94", flags: [.advancedEq: 0, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 4, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 2, .mimi: 1, .personalizedAnc: 1]),
-            .init(minFirmware: "*.*.1.95", maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 4, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 2, .mimi: 1, .personalizedAnc: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: "*.*.1.94", flags: [.advancedEq: 0, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 4, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 2, .mimi: 1, .personalizedAnc: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "*.*.1.95", maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 4, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 2, .mimi: 1, .personalizedAnc: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B162", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 4, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 4, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B171", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 4, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 7, .mimi: 1, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 4, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 7, .mimi: 1, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B163", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 55, .buttonPosition: 2, .dualConnection: 0]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 55, .buttonPosition: 2, .dualConnection: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.playPause, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.playPause, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B164", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 3, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .spatialAudio: 6, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 3, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .spatialAudio: 6, .ultraBass: 1], gestures: [
+                .init(device: 6, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 6, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 6, button: 1, gesture: .pressHold, actions: [.noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B168", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 49, .buttonPosition: 4, .dualConnection: 1, .eq: 0, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 49, .buttonPosition: 4, .dualConnection: 1, .eq: 0, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .profiles([.diracOpteo, .rock, .electronic, .pop, .vocals, .classical, .custom])),
         .init(id: "B172", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 0, .highQualityAudio: 4, .smartKnob: 1, .spatialAudio: 6, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 0, .highQualityAudio: 4, .smartKnob: 1, .spatialAudio: 6, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .singlePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .triplePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .rotate, actions: [.noAction, .volumeControl], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 9, gesture: .doublePress, actions: [.noAction, .answerCall, .answerCallAndMute], defaultAction: nil, evidence: .derived),
+                .init(device: 4, button: 9, gesture: .triplePress, actions: [.noAction, .hangUp], defaultAction: nil, evidence: .derived),
+            ]),
+        ], sound: .profiles([.diracOpteo, .rock, .electronic, .pop, .vocals, .classical, .custom])),
         .init(id: "B174", bands: [
-            .init(minFirmware: nil, maxFirmware: "1.0.1.26", flags: [.advancedEq: 1, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .eq: 31, .ultraBass: 0]),
-            .init(minFirmware: "1.0.1.27", maxFirmware: "1.0.1.27", flags: [.adapterVolume: 1, .advancedEq: 1, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .eq: 31, .ultraBass: 0]),
-            .init(minFirmware: "1.0.1.28", maxFirmware: nil, flags: [.advancedEq: 1, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .eq: 31, .ultraBass: 0]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: "1.0.1.26", flags: [.advancedEq: 1, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .eq: 31, .ultraBass: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "1.0.1.27", maxFirmware: "1.0.1.27", flags: [.adapterVolume: 1, .advancedEq: 1, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .eq: 31, .ultraBass: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "1.0.1.28", maxFirmware: nil, flags: [.advancedEq: 1, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .eq: 31, .ultraBass: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B170", bands: [
-            .init(minFirmware: nil, maxFirmware: "*.*.1.74", flags: [.advancedEq: 1, .ancLevel: 63, .deviceType: 6, .dualConnection: 1, .earDetection: 1, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 1, .spatialAudio: 7, .ultraBass: 1]),
-            .init(minFirmware: "*.*.1.75", maxFirmware: nil, flags: [.advancedEq: 1, .ancLevel: 63, .audiodo: 1, .deviceType: 6, .dualConnection: 1, .earDetection: 1, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 1, .spatialAudio: 7, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: "*.*.1.74", flags: [.advancedEq: 1, .ancLevel: 63, .deviceType: 6, .dualConnection: 1, .earDetection: 1, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 1, .spatialAudio: 7, .ultraBass: 1], gestures: [
+                .init(device: 6, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .wire),
+                .init(device: 6, button: 10, gesture: .singlePress, actions: [.noAction, .noiseControl, .voiceAssistant, .spatialAudio, .micMute, .news, .radio, .eqPreset], defaultAction: .voiceAssistant, evidence: .wire),
+                .init(device: 6, button: 10, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .spatialAudio, .micMute, .news, .radio, .essentialSpace, .eqPreset], defaultAction: .noAction, evidence: .wire),
+            ]),
+            .init(minFirmware: "*.*.1.75", maxFirmware: nil, flags: [.advancedEq: 1, .ancLevel: 63, .audiodo: 1, .deviceType: 6, .dualConnection: 1, .earDetection: 1, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 1, .spatialAudio: 7, .ultraBass: 1], gestures: [
+                .init(device: 6, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .wire),
+                .init(device: 6, button: 10, gesture: .singlePress, actions: [.noAction, .noiseControl, .voiceAssistant, .spatialAudio, .micMute, .news, .radio, .eqPreset], defaultAction: .voiceAssistant, evidence: .wire),
+                .init(device: 6, button: 10, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .spatialAudio, .micMute, .news, .radio, .essentialSpace, .eqPreset], defaultAction: .noAction, evidence: .wire),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B175", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .audiodo: 1, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .findDevice: 1, .highQualityAudio: 4, .spatialAudio: 28, .ultraBass: 0]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .audiodo: 1, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .findDevice: 1, .highQualityAudio: 4, .spatialAudio: 28, .ultraBass: 0], gestures: [
+                .init(device: 6, button: 1, gesture: .pressHold, actions: [.noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 6, button: 5, gesture: .singlePress, actions: [.ultraBass, .trebleEnhance], defaultAction: .ultraBass, evidence: .crossChecked),
+                .init(device: 6, button: 10, gesture: .singlePress, actions: [.noAction, .noiseControl, .voiceAssistant, .spatialAudio, .micMute, .news], defaultAction: .voiceAssistant, evidence: .crossChecked),
+                .init(device: 6, button: 10, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .spatialAudio, .micMute, .news, .essentialSpace], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .profiles([.diracOpteo, .rock, .electronic, .pop, .vocals, .classical, .custom])),
         .init(id: "B185", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 49, .buttonPosition: 4, .dualConnection: 1, .earDetection: 0, .eq: 0, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 49, .buttonPosition: 4, .dualConnection: 1, .earDetection: 0, .eq: 0, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .profiles([.rock, .electronic, .pop, .vocals, .classical, .custom, .dirac])),
         .init(id: "B179", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .spatialAudio: 6, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .spatialAudio: 6, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .profiles([.diracOpteo, .rock, .electronic, .pop, .vocals, .classical, .custom])),
         .init(id: "B184", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .audiodo: 1, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .audiodo: 1, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .profiles([.diracOpteo, .rock, .electronic, .pop, .vocals, .classical, .custom])),
         .init(id: "B173", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .audiodo: 1, .buttonPosition: 1, .callTransparency: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .superMic: 1, .ultraBass: 1, .walkieTalkieMode: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .audiodo: 1, .buttonPosition: 1, .callTransparency: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .superMic: 1, .ultraBass: 1, .walkieTalkieMode: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .pressHold, actions: [.noAction, .voiceAssistant, .essentialSpace], defaultAction: .voiceAssistant, evidence: .derived),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B183", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .derived),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B187", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 0, .dualConnection: 1, .earTipFitTest: 1, .eq: 0, .highQualityAudio: 4, .smartKnob: 1, .spatialAudio: 6, .ultraBass: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.ancLevel: 63, .buttonPosition: 0, .dualConnection: 1, .earTipFitTest: 1, .eq: 0, .highQualityAudio: 4, .smartKnob: 1, .spatialAudio: 6, .ultraBass: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .news], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .singlePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .triplePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .rotate, actions: [.noAction, .volumeControl], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 9, gesture: .doublePress, actions: [.noAction, .answerCall, .answerCallAndMute], defaultAction: nil, evidence: .derived),
+                .init(device: 4, button: 9, gesture: .triplePress, actions: [.noAction, .hangUp], defaultAction: nil, evidence: .derived),
+            ]),
+        ], sound: .neither),
         .init(id: "B186", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .ancLevel: 63, .audiodo: 0, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 0, .spatialAudio: 28, .ultraBass: 1, .ultraBassType: 3]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .ancLevel: 63, .audiodo: 0, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 0, .spatialAudio: 28, .ultraBass: 1, .ultraBassType: 3], gestures: [
+                .init(device: 6, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 6, button: 10, gesture: .singlePress, actions: [.noAction, .noiseControl, .voiceAssistant, .cameraShutter, .micMute, .news, .radio, .eqPreset], defaultAction: .voiceAssistant, evidence: .crossChecked),
+                .init(device: 6, button: 10, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .micMute, .news, .radio, .essentialSpace, .eqPreset], defaultAction: .noAction, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B198", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .ancLevel: 63, .audiodo: 0, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 0, .spatialAudio: 28, .ultraBass: 1, .ultraBassType: 3]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .ancLevel: 63, .audiodo: 0, .deviceType: 6, .dualConnection: 1, .earDetection: 0, .eq: 31, .findDevice: 1, .highQualityAudio: 4, .magicButton: 1, .mutuallyExclusive: 0, .spatialAudio: 28, .ultraBass: 1, .ultraBassType: 3], gestures: [
+                .init(device: 6, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 6, button: 10, gesture: .singlePress, actions: [.noAction, .noiseControl, .voiceAssistant, .cameraShutter, .micMute, .news, .radio, .eqPreset], defaultAction: .voiceAssistant, evidence: .derived),
+                .init(device: 6, button: 10, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .micMute, .news, .radio, .essentialSpace, .eqPreset], defaultAction: .noAction, evidence: .derived),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B201", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .audiodo: 1, .buttonPosition: 1, .callTransparency: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .superMic: 1, .ultraBass: 1, .walkieTalkieMode: 1]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .audiodo: 1, .buttonPosition: 1, .callTransparency: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .superMic: 1, .ultraBass: 1, .walkieTalkieMode: 1], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news], defaultAction: .noiseControl, evidence: .derived),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .derived),
+                .init(device: 4, button: 1, gesture: .pressHold, actions: [.noAction, .voiceAssistant, .essentialSpace], defaultAction: .voiceAssistant, evidence: .derived),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B190", bands: [
-            .init(minFirmware: nil, maxFirmware: "1.0.1.36", flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 0, .walkieTalkieMode: 0]),
-            .init(minFirmware: "1.0.1.37", maxFirmware: "1.0.1.60", flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 0, .walkieTalkieMode: 0]),
-            .init(minFirmware: "1.0.1.61", maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 0, .walkieTalkieMode: 0]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: "1.0.1.36", flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 0, .walkieTalkieMode: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news, .recording], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pinchBoth, actions: [.noAction, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news, .recording], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pinchBoth, actions: [.noAction, .recording], defaultAction: .recording, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "1.0.1.37", maxFirmware: "1.0.1.60", flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 0, .walkieTalkieMode: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news, .recording], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pinchBoth, actions: [.noAction, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news, .recording], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pinchBoth, actions: [.noAction, .recording], defaultAction: .recording, evidence: .crossChecked),
+            ]),
+            .init(minFirmware: "1.0.1.61", maxFirmware: nil, flags: [.advancedEq: 1, .advancedEqTotalGain: -6, .ancLevel: 63, .buttonPosition: 1, .dualConnection: 1, .earTipFitTest: 1, .eq: 31, .highQualityAudio: 4, .spatialAudio: 6, .ultraBass: 0, .walkieTalkieMode: 0], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news, .recording], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pinchBoth, actions: [.noAction, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .micMute, .news, .recording], defaultAction: .noiseControl, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .noiseControl, .voiceAssistant, .volumeUp, .volumeDown, .news, .recording], defaultAction: .recording, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pinchBoth, actions: [.noAction, .recording], defaultAction: .recording, evidence: .crossChecked),
+            ]),
+        ], sound: .presets([.balanced, .voice, .treble, .bass, .custom])),
         .init(id: "B189", bands: [
-            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 0, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .highQualityAudio: 4, .longPowerMode: 1, .spatialAudio: 6, .supportLeakageProtection: 1, .ultraBass: 1, .ultraBassType: 3]),
-        ]),
+            .init(minFirmware: nil, maxFirmware: nil, flags: [.advancedEq: 0, .buttonPosition: 2, .dualConnection: 1, .earDetection: 0, .highQualityAudio: 4, .longPowerMode: 1, .spatialAudio: 6, .supportLeakageProtection: 1, .ultraBass: 1, .ultraBassType: 3], gestures: [
+                .init(device: 2, button: 1, gesture: .doublePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .pressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 2, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipForward, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .triplePress, actions: [.noAction, .skipBack, .skipForward, .voiceAssistant, .news], defaultAction: .skipBack, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .pressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 3, button: 1, gesture: .doublePressHold, actions: [.noAction, .voiceAssistant, .volumeUp, .volumeDown, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .singlePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .doublePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .triplePress, actions: [.noAction, .playPause, .skipBack, .skipForward, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .pressHold, actions: [.noAction, .voiceAssistant, .lowLagMode, .news], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 1, gesture: .rotate, actions: [.noAction, .volumeControl], defaultAction: .noAction, evidence: .crossChecked),
+                .init(device: 4, button: 9, gesture: .doublePress, actions: [.noAction, .answerCall, .answerCallAndMute], defaultAction: nil, evidence: .crossChecked),
+                .init(device: 4, button: 9, gesture: .triplePress, actions: [.noAction, .hangUp], defaultAction: nil, evidence: .crossChecked),
+            ]),
+        ], sound: .profiles([.rock, .electronic, .pop, .vocals, .classical, .custom])),
     ]
+
+    // MARK: - Опознание устройства
+
+    /// Запись таблицы опознания. Канал опознания отдаёт семь байт, и последние
+    /// три — ключ сюда. Одна модель встречается столько раз, сколько у неё
+    /// цветов: отдельного поля цвета нет нигде, цвет — это то, какая запись
+    /// совпала.
+    ///
+    /// `artwork` — основа имени файлов с рендерами: к ней дописывается
+    /// `_left`, `_right`, `_case`, `_duo` и `.webp`. Из `base` она НЕ выводится:
+    /// у двух записей картинки лежат под номером базы, а не альтернативы,
+    /// у остальных двенадцати наоборот. Поэтому хранится как есть.
+    ///
+    /// Сами файлы в репозиторий и бандл не входят и входить не должны — они
+    /// лежат в скачанной копии сайта на машине пользователя.
+    public struct Identity {
+        public let code: String
+        public let name: String
+        public let base: String
+        /// Второй возможный номер модели для того же железа. Чем именно
+        /// выбирается один из двух, из кода донора не видно; не угадывать.
+        public let altBase: String?
+        public let artwork: String
+    }
+
+    /// 63 записей опознания.
+    public static let identities: [Identity] = [
+        .init(code: "DEE8C0", name: "Ear (2)", base: "B155", altBase: nil, artwork: "b155_black"),
+        .init(code: "ACC520", name: "Ear (2)", base: "B155", altBase: nil, artwork: "b155_white"),
+        .init(code: "1016DD", name: "Ear (Stick)", base: "B157", altBase: nil, artwork: "b157_white"),
+        .init(code: "03464E", name: "Nothing Ear (a)", base: "B162", altBase: nil, artwork: "b162_black"),
+        .init(code: "5E3FBC", name: "Nothing Ear (a)", base: "B162", altBase: nil, artwork: "b162_white"),
+        .init(code: "8B6380", name: "Nothing Ear (a)", base: "B162", altBase: nil, artwork: "b162_yellow"),
+        .init(code: "C34F3B", name: "Nothing Ear (a)", base: "B162", altBase: "B183", artwork: "b183_black"),
+        .init(code: "404D6D", name: "Nothing Ear (a)", base: "B162", altBase: "B183", artwork: "b183_white"),
+        .init(code: "839E9A", name: "Nothing Ear (a)", base: "B162", altBase: "B183", artwork: "b183_yellow"),
+        .init(code: "ADD2C4", name: "Buds Pro", base: "B163", altBase: nil, artwork: "b163_black"),
+        .init(code: "5F8F82", name: "Buds Pro", base: "B163", altBase: nil, artwork: "b163_orange"),
+        .init(code: "2EB1CA", name: "Buds Pro", base: "B163", altBase: nil, artwork: "b163_white"),
+        .init(code: "AE35FD", name: "Neckband Pro", base: "B164", altBase: nil, artwork: "b164_black"),
+        .init(code: "4DFC4A", name: "Neckband Pro", base: "B164", altBase: nil, artwork: "b164_orange"),
+        .init(code: "26C190", name: "Neckband Pro", base: "B164", altBase: nil, artwork: "b164_white"),
+        .init(code: "150A27", name: "CMF Buds", base: "B168", altBase: nil, artwork: "b168_black"),
+        .init(code: "D35E18", name: "CMF Buds", base: "B168", altBase: nil, artwork: "b168_orange"),
+        .init(code: "ACCE54", name: "CMF Buds", base: "B168", altBase: nil, artwork: "b168_white"),
+        .init(code: "C19ECD", name: "Nothing Headphone (1)", base: "B170", altBase: nil, artwork: "b170_black"),
+        .init(code: "2D6FDA", name: "Nothing Headphone (1)", base: "B170", altBase: nil, artwork: "b170_grey"),
+        .init(code: "A20444", name: "Nothing Ear", base: "B171", altBase: nil, artwork: "b171_black"),
+        .init(code: "FEB1C7", name: "Nothing Ear", base: "B171", altBase: nil, artwork: "b171_white"),
+        .init(code: "F29566", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_black"),
+        .init(code: "2B353E", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_blue"),
+        .init(code: "A7B220", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_orange"),
+        .init(code: "CA36A6", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_white"),
+        .init(code: "2F45F5", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_black"),
+        .init(code: "0F1A4F", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_blue"),
+        .init(code: "1253C0", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_orange"),
+        .init(code: "E1BE45", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_white"),
+        .init(code: "7D46E5", name: "Nothing Ear (3)", base: "B173", altBase: "B201", artwork: "b173_black"),
+        .init(code: "C1EBFD", name: "Nothing Ear (3)", base: "B173", altBase: "B201", artwork: "b173_white"),
+        .init(code: "CC3444", name: "Nothing Ear (open)", base: "B174", altBase: nil, artwork: "b174_blue"),
+        .init(code: "FC3AAF", name: "Nothing Ear (open)", base: "B174", altBase: nil, artwork: "b174_white"),
+        .init(code: "1EFB39", name: "CMF Headphone Pro", base: "B175", altBase: nil, artwork: "b175_black"),
+        .init(code: "563DA5", name: "CMF Headphone Pro", base: "B175", altBase: nil, artwork: "b175_green"),
+        .init(code: "73C9EB", name: "CMF Headphone Pro", base: "B175", altBase: nil, artwork: "b175_white"),
+        .init(code: "19EF24", name: "CMF Buds 2", base: "B179", altBase: nil, artwork: "b179_black"),
+        .init(code: "FF2AB0", name: "CMF Buds 2", base: "B179", altBase: nil, artwork: "b179_green"),
+        .init(code: "D9AB5D", name: "CMF Buds 2", base: "B179", altBase: nil, artwork: "b179_orange"),
+        .init(code: "624011", name: "Nothing ear (1)", base: "B181", altBase: nil, artwork: "b181_black"),
+        .init(code: "31D53D", name: "Nothing ear (1)", base: "B181", altBase: nil, artwork: "b181_white"),
+        .init(code: "5C587F", name: "CMF Buds 2 Plus", base: "B184", altBase: nil, artwork: "b184_blue"),
+        .init(code: "4AEB6E", name: "CMF Buds 2 Plus", base: "B184", altBase: nil, artwork: "b184_white"),
+        .init(code: "70F8E3", name: "CMF Buds 2a", base: "B185", altBase: nil, artwork: "b185_black"),
+        .init(code: "509CAE", name: "CMF Buds 2a", base: "B185", altBase: nil, artwork: "b185_orange"),
+        .init(code: "ED5412", name: "CMF Buds 2a", base: "B185", altBase: nil, artwork: "b185_white"),
+        .init(code: "BFD53B", name: "Nothing Headphone (a)", base: "B186", altBase: nil, artwork: "b186_black"),
+        .init(code: "98D02B", name: "Nothing Headphone (a)", base: "B186", altBase: nil, artwork: "b186_pink"),
+        .init(code: "DE8953", name: "Nothing Headphone (a)", base: "B186", altBase: nil, artwork: "b186_white"),
+        .init(code: "6F6C71", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_black"),
+        .init(code: "A292C6", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_pink"),
+        .init(code: "810478", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_white"),
+        .init(code: "97EF75", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_yellow"),
+        .init(code: "79B3A9", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_yellow"),
+        .init(code: "DA1280", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_black"),
+        .init(code: "8F28ED", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_blue"),
+        .init(code: "E6673A", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_orange"),
+        .init(code: "DCD2CB", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_white"),
+        .init(code: "E9C3BE", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_black"),
+        .init(code: "148887", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_pink"),
+        .init(code: "7B2328", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_white"),
+        .init(code: "DB45D3", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_yellow"),
+    ]
+
+    /// Опознание по семи байтам канала опознания: ключ — последние три,
+    /// записанные заглавным гексом.
+    public static func identity(fastpair bytes: [UInt8]) -> Identity? {
+        guard bytes.count >= 3 else { return nil }
+        let code = bytes.suffix(3).map { String(format: "%02X", $0) }.joined()
+        return identities.first { $0.code == code }
+    }
 
     // MARK: - Разрешение возможностей
 
@@ -315,6 +816,15 @@ public enum NothingCatalog {
         guard let m = model(id) else { return [:] }
         if m.bands.count == 1 { return m.bands[0].flags }
         return m.bands.first(where: { inBand(firmware, $0) })?.flags ?? [:]
+    }
+
+    /// Раскладка жестов модели на конкретной прошивке. Полоса выбирается тем
+    /// же способом, что и флаги, — иначе B157 на старой прошивке получит
+    /// шумоподавление, которого у него на ней нет.
+    public static func gestures(model id: String, firmware: String) -> [GestureSlot] {
+        guard let m = model(id) else { return [] }
+        if m.bands.count == 1 { return m.bands[0].gestures }
+        return m.bands.first(where: { inBand(firmware, $0) })?.gestures ?? []
     }
 
     /// Имеет ли смысл слать команду этому устройству.

@@ -129,9 +129,15 @@ public enum NothingProtocol {
 
         case setANC               = 0xF00F
         case setEqualiser         = 0xF010
+        case customEQ             = 0xC044
+        case advancedEQValue      = 0xC04D
+
         case setBassEnhance       = 0xF051
         case setUTCTime           = 0xF00A
         case ringDevice           = 0xF002
+        case setGestures          = 0xF003
+        case setCustomEQ          = 0xF041
+        case setAdvancedEQValue   = 0xF050
     }
 
     // MARK: - Разбор ответов
@@ -224,10 +230,33 @@ public enum NothingProtocol {
     }
 
     /// Пресет эквалайзера, ответ `0x401F`.
-    public enum EqualiserPreset: UInt8 { case balanced = 0, voice = 1, treble = 2, bass = 3, custom = 5 }
+    ///
+    /// Значения взяты из диспетчера `setEQfromRead` и подтверждены подписями
+    /// кнопок в разметке страницы. Комментарий в шапке того же файла у донора
+    /// обещает другое (`1 = More Bass`, `3 = More Voice`, `4 = Custom`) и
+    /// разошёлся с собственным кодом — на него не полагаться.
+    ///
+    /// Шестёрки в списке нет намеренно: «Advanced» на странице выглядит шестым
+    /// пресетом, но пресетом не является — кнопка шлёт не `0xF010`, а
+    /// включение продвинутого эквалайзера `0xF04F`.
+    public enum EqualiserPreset: UInt8, CaseIterable {
+        case balanced = 0
+        case voice    = 1
+        case treble   = 2
+        case bass     = 3
+        case custom   = 5
+    }
 
     public static func parseEqualiser(_ frame: Frame) -> EqualiserPreset? {
         frame.payload.first.flatMap(EqualiserPreset.init(rawValue:))
+    }
+
+    /// Запись `0xF010`: `[пресет, 0x00]`. Второй байт у донора всегда ноль
+    /// и никогда не заполняется — но короче кадр он не делает.
+    public static func encodeSetEqualiser(_ preset: EqualiserPreset, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setEqualiser.rawValue,
+                     operationID: operationID,
+                     payload: [preset.rawValue, 0x00]))
     }
 
     /// Ответы, состоящие из одного значения: `0x4041` задержка, `0x404C`
@@ -258,5 +287,237 @@ public enum NothingProtocol {
         encode(Frame(command: Command.setBassEnhance.rawValue,
                      operationID: operationID,
                      payload: [enabled ? 1 : 0, UInt8(max(1, min(5, level)) * 2)]))
+    }
+
+    // MARK: - Жесты
+
+    /// Одна строка раскладки управления: четыре байта на проводе. Первые три
+    /// адресуют физический жест, четвёртый говорит, что он делает.
+    ///
+    /// Имена полей взяты из конфига донора (`deviceType`, `button`, `gesture`,
+    /// `operation`). В его JS те же четыре байта названы `gestureDevice`,
+    /// `gestureCommon`, `gestureType`, `gestureAction` — эти имена путают
+    /// кнопку с типом жеста, и полагаться на них нельзя.
+    ///
+    /// Числа не разбираются на смыслы: у каждой модели свой набор кнопок,
+    /// жестов и допустимых действий, и это данные, а не ветки в коде. Одна
+    /// подсказка про действия: `0x0A` — переключение шумоподавления по кругу,
+    /// а `0x14`, `0x15`, `0x16` — то же переключение с одним из трёх режимов,
+    /// исключённым из круга (прозрачность, шумодав, выключено соответственно).
+    public struct Gesture: Equatable {
+        public let device: UInt8
+        public let button: UInt8
+        public let gesture: UInt8
+        public let action: UInt8
+
+        public init(device: UInt8, button: UInt8, gesture: UInt8, action: UInt8) {
+            self.device = device
+            self.button = button
+            self.gesture = gesture
+            self.action = action
+        }
+    }
+
+    /// Состав круга, по которому жест гоняет шумоподавление.
+    ///
+    /// Порядок флажков взят из разметки всплывающего окна донора, а не с
+    /// провода: прозрачность, шумоподавление, выключено. Меньше двух режимов
+    /// в круге интерфейс оставить не даёт, поэтому кодов ровно четыре.
+    public struct NoiseCycle: Equatable {
+        public let transparency: Bool
+        public let cancellation: Bool
+        public let off: Bool
+
+        public init(transparency: Bool, cancellation: Bool, off: Bool) {
+            self.transparency = transparency
+            self.cancellation = cancellation
+            self.off = off
+        }
+    }
+
+    /// Круг для действия жеста. `nil` — действие не про шумоподавление.
+    ///
+    /// Нужно потому, что каталог знает действие `0x0A`, а провод возвращает
+    /// `0x16`: у B170 колесо на удержании стоит именно в круге без «выключено».
+    /// Без этой пары интерфейс не узнаёт в ответе устройства то, что сам же
+    /// перечислил как допустимое.
+    public static func noiseCycle(_ action: UInt8) -> NoiseCycle? {
+        switch action {
+        case 0x0A: return .init(transparency: true,  cancellation: true,  off: true)
+        case 0x14: return .init(transparency: false, cancellation: true,  off: true)
+        case 0x15: return .init(transparency: true,  cancellation: false, off: true)
+        case 0x16: return .init(transparency: true,  cancellation: true,  off: false)
+        default:   return nil
+        }
+    }
+
+    /// Обратно: код действия по составу круга. `nil` — такого круга не бывает,
+    /// а не «мы его не нашли»: комбинаций всего четыре, остальные интерфейс
+    /// донора собрать не даёт.
+    public static func noiseAction(_ cycle: NoiseCycle) -> UInt8? {
+        switch (cycle.transparency, cycle.cancellation, cycle.off) {
+        case (true,  true,  true):  return 0x0A
+        case (false, true,  true):  return 0x14
+        case (true,  false, true):  return 0x15
+        case (true,  true,  false): return 0x16
+        default:                    return nil
+        }
+    }
+
+    /// Ответ `0x4018`: `[число строк]` и дальше по четыре байта на строку.
+    ///
+    /// Шаг именно четыре. Догадка «четыре строки по три байта» на захвате B170
+    /// сходилась по длине (13 = 1 + 4×3 = 1 + 3×4) и была неверной — совпадение
+    /// длины тут ничего не доказывает, шаг взят из разбора у донора.
+    public static func parseGestures(_ frame: Frame) -> [Gesture] {
+        guard let count = frame.payload.first else { return [] }
+        var result = [Gesture]()
+        for i in 0..<Int(count) {
+            let base = 1 + i * 4
+            guard base + 3 < frame.payload.count else { break }
+            result.append(.init(device: frame.payload[base],
+                                button: frame.payload[base + 1],
+                                gesture: frame.payload[base + 2],
+                                action: frame.payload[base + 3]))
+        }
+        return result
+    }
+
+    // MARK: - Эквалайзер по полосам
+
+    /// Одна полоса параметрического эквалайзера — тринадцать байт на проводе:
+    /// `[тип фильтра][усиление][частота][добротность]`, три числа по четыре
+    /// байта. Известные типы фильтра: `0` полка снизу, `1` пик, `2` полка
+    /// сверху. Хранится сырым числом — вдруг устройство знает больше.
+    public struct EQBand: Equatable {
+        public let filterType: UInt8
+        public let gain: Float
+        public let frequency: Float
+        public let quality: Float
+
+        public init(filterType: UInt8, gain: Float, frequency: Float, quality: Float) {
+            self.filterType = filterType
+            self.gain = gain
+            self.frequency = frequency
+            self.quality = quality
+        }
+    }
+
+    /// Кривая эквалайзера. Одна раскладка на две команды: у продвинутого
+    /// (`0x404D` / `0xF050`) впереди лишний байт профиля, у пользовательского
+    /// (`0x4044` / `0xF041`) его нет, дальше всё совпадает.
+    ///
+    /// `totalGain` донор считает как `-max(0, усиления)` — запас, чтобы сумма
+    /// полос не ушла в клиппинг. Повторяем его арифметику, а не изобретаем.
+    public struct EQCurve: Equatable {
+        public let profile: UInt8?
+        public let totalGain: Float
+        public let bands: [EQBand]
+
+        public init(profile: UInt8?, totalGain: Float, bands: [EQBand]) {
+            self.profile = profile
+            self.totalGain = totalGain
+            self.bands = bands
+        }
+
+        /// Кривая с общим усилением по правилу донора.
+        public init(profile: UInt8?, bands: [EQBand]) {
+            self.init(profile: profile,
+                      totalGain: -max(0, bands.map(\.gain).max() ?? 0),
+                      bands: bands)
+        }
+    }
+
+    /// Числа эквалайзера — IEEE-754 одинарной точности, **little-endian**.
+    /// Донор пишет их big-endian и тут же разворачивает массив; результат тот
+    /// же, а промежуточный шаг только путает.
+    static func float32(_ bytes: ArraySlice<UInt8>) -> Float {
+        let b = Array(bytes)
+        guard b.count == 4 else { return 0 }
+        return Float(bitPattern: UInt32(b[0]) | UInt32(b[1]) << 8
+                              | UInt32(b[2]) << 16 | UInt32(b[3]) << 24)
+    }
+
+    static func float32(_ value: Float) -> [UInt8] {
+        let bits = value.bitPattern
+        return [UInt8(bits & 0xFF), UInt8(bits >> 8 & 0xFF),
+                UInt8(bits >> 16 & 0xFF), UInt8(bits >> 24 & 0xFF)]
+    }
+
+    /// Есть ли у команды ведущий байт профиля. Списком, а не арифметикой по
+    /// младшему байту: список видно глазами и он не подберёт чужую команду.
+    static func carriesProfile(_ command: UInt16) -> Bool {
+        [0xC04D, 0x404D, 0xF050, 0x7050].contains(command)
+    }
+
+    /// Разбирает `0x4044`, `0x404D` и собственные записи в них же.
+    ///
+    /// Число полос берётся из заголовка, а не из длины: устройство отвечает
+    /// буфером постоянного размера на восемь полос и при пустой настройке
+    /// присылает 109 или 110 нулевых байт. Ноль полос — это «не настроено»,
+    /// а не «ответ пустой».
+    ///
+    /// Разворот чисел, который донор делает на чтении для крошечных значений
+    /// (меньше денормализованного минимума), не повторяем: для усиления,
+    /// частоты и добротности такие значения недостижимы.
+    public static func parseEQCurve(_ frame: Frame) -> EQCurve? {
+        let profiled = carriesProfile(frame.command)
+        let head = profiled ? 2 : 1
+        guard frame.payload.count >= head + 4 else { return nil }
+        let count = Int(frame.payload[head - 1])
+        let totalGain = float32(frame.payload[head..<head + 4])
+        var bands = [EQBand]()
+        for i in 0..<count {
+            let base = head + 4 + i * 13
+            guard base + 13 <= frame.payload.count else { break }
+            bands.append(.init(filterType: frame.payload[base],
+                               gain: float32(frame.payload[base + 1..<base + 5]),
+                               frequency: float32(frame.payload[base + 5..<base + 9]),
+                               quality: float32(frame.payload[base + 9..<base + 13])))
+        }
+        return EQCurve(profile: profiled ? frame.payload[0] : nil,
+                       totalGain: totalGain, bands: bands)
+    }
+
+    static func eqPayload(_ curve: EQCurve, profiled: Bool) -> [UInt8] {
+        var payload = [UInt8]()
+        if profiled { payload.append(curve.profile ?? 0) }
+        payload.append(UInt8(curve.bands.count))
+        payload += float32(curve.totalGain)
+        for band in curve.bands {
+            payload.append(band.filterType)
+            payload += float32(band.gain)
+            payload += float32(band.frequency)
+            payload += float32(band.quality)
+        }
+        return payload
+    }
+
+    /// Запись `0xF050`. Раскладка та же, что у чтения `0x404D`, но профиль
+    /// донор пишет нулём, а спрашивает двести пятьдесят пятым — эту асимметрию
+    /// оставляем на усмотрение вызывающего.
+    public static func encodeSetAdvancedEQ(_ curve: EQCurve, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setAdvancedEQValue.rawValue, operationID: operationID,
+                     payload: eqPayload(curve, profiled: true)))
+    }
+
+    /// Запись `0xF041`. Донор дописывает в хвост по три нуля на полосу, чего
+    /// в раскладке чтения нет вовсе; повторяем как есть — расхождение может
+    /// оказаться и форматом, и его небрежностью, проверить пока не на чем.
+    public static func encodeSetCustomEQ(_ curve: EQCurve, operationID: UInt8) -> [UInt8] {
+        let payload = eqPayload(curve, profiled: false)
+            + [UInt8](repeating: 0, count: curve.bands.count * 3)
+        return encode(Frame(command: Command.setCustomEQ.rawValue, operationID: operationID,
+                            payload: payload))
+    }
+
+    /// Запись `0xF003`: та же строка, ровно одна, с ведущим счётчиком.
+    /// Раскладка байтов совпадает с чтением, хотя по сигнатуре донорского
+    /// `sendGestures(device, typeog, action, typebutton)` этого не видно:
+    /// четвёртый её аргумент ложится во второй байт строки.
+    public static func encodeSetGesture(_ gesture: Gesture, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setGestures.rawValue,
+                     operationID: operationID,
+                     payload: [0x01, gesture.device, gesture.button, gesture.gesture, gesture.action]))
     }
 }
