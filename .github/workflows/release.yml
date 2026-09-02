@@ -60,11 +60,14 @@ jobs:
           annoys you, build from source with your own self-signed certificate — the
           README explains how, and the permission then survives rebuilds.
 
-          **The interface downloads on first launch.** This release bundles no upstream
-          code; the app fetches the interface from https://earweb.bttl.xyz on first run
-          and keeps a local copy for offline use afterwards. Have your headphones
-          connected before the first launch — the identification channel answers only
-          right after connecting.
+          **Have your headphones connected before the first launch.** The channel that
+          reports the device model answers only right after connecting, and without the
+          model the controls that depend on it — noise cancellation strength, the gesture
+          layout — do not appear. The app remembers the answer afterwards.
+
+          A normal launch downloads nothing. The borrowed web interface is still
+          available behind the `--web` flag, and only that mode fetches it from
+          https://earweb.bttl.xyz.
           NOTES
           gh release create "$GITHUB_REF_NAME" \
             "nothing-audio-driver-macos-${GITHUB_REF_NAME}.zip" checksums.txt \
