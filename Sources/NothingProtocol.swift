@@ -139,6 +139,15 @@ public enum NothingProtocol {
         case setGestures          = 0xF003
         case setCustomEQ          = 0xF041
         case setAdvancedEQValue   = 0xF050
+        case setInEarDetection    = 0xF004
+        case setPersonalSound     = 0xF05C
+        case dualList             = 0xC028
+        case setDualEnabled       = 0xF01A
+        case setDualConnect       = 0xF01B
+        case setPersonalSoundMimi = 0xF015
+        case setHighQualityAudio  = 0xF01C
+        case setLatency           = 0xF040
+        case setSpatialAudio      = 0xF052
     }
 
     // MARK: - Разбор ответов
@@ -269,6 +278,15 @@ public enum NothingProtocol {
         parseSettings(frame)[Setting.inEarDetection.rawValue].map { $0 != 0 }
     }
 
+    /// Запись детекции в ухе `0xF004`: `[0x01, 0x01, признак]`. Первая пара —
+    /// это «одна запись, идентификатор 1», то есть та же форма блока настроек,
+    /// что и в ответе `0x400E`, только на одну запись.
+    public static func encodeSetInEarDetection(_ on: Bool, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setInEarDetection.rawValue,
+                     operationID: operationID,
+                     payload: [0x01, Setting.inEarDetection.rawValue, on ? 1 : 0]))
+    }
+
     /// Пресет эквалайзера, ответ `0x401F`.
     ///
     /// Значения взяты из диспетчера `setEQfromRead` и подтверждены подписями
@@ -299,11 +317,226 @@ public enum NothingProtocol {
                      payload: [preset.rawValue, 0x00]))
     }
 
-    /// Ответы, состоящие из одного значения: `0x4041` задержка, `0x404C`
-    /// продвинутый эквалайзер, `0x405A` персональный звук, `0x4027` две пары,
-    /// `0x4029` кодек, `0x404F` пространственный звук (два байта, значим первый).
+    /// Ответы, состоящие из одного значения: `0x404C` продвинутый эквалайзер,
+    /// `0x405A` персональный звук, `0x4027` две пары.
+    ///
+    /// Задержки, кодека и пространственного звука здесь больше нет: у каждого
+    /// свой разбор. У пространственного звука значимы **оба** байта — это
+    /// снято проводом, — а задержка кодируется единицей и двойкой, а не
+    /// признаком, и «одно значение» про неё сказало бы неправду.
     public static func parseSingleValue(_ frame: Frame) -> UInt8? {
         frame.payload.first
+    }
+
+    /// Режим низкой задержки, ответ `0x4041` и запись `0xF040`.
+    ///
+    /// ⚠ Значения **не** булевы и не совпадают с привычным `1/0`: включено —
+    /// `1`, выключено — `2`. Ноль на проводе не появляется вовсе. У донора это
+    /// видно с двух сторон: `setLatencyModeCheckbox` ставит галку по `1` и
+    /// снимает по `2`, а `setLatency(0)` пишет байт `0x02`, а не `0x00`.
+    public static func parseLatency(_ frame: Frame) -> Bool? {
+        guard let value = frame.payload.first else { return nil }
+        return value == 1
+    }
+
+    public static func encodeSetLatency(_ on: Bool, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setLatency.rawValue,
+                     operationID: operationID,
+                     payload: [on ? 1 : 2, 0x00]))
+    }
+
+    /// Пространственный звук, ответ `0x404F` и запись `0xF052`: `[режим, голова]`.
+    ///
+    /// Два байта, и **оба значимы**: «следит за головой» — это не отдельный
+    /// режим, а тот же первый режим со вторым байтом `1`. Поэтому разбор
+    /// начинается со второго байта, а не с первого, — иначе «следит за головой»
+    /// и «фиксированный» слились бы в одно.
+    ///
+    /// Какие режимы доступны модели — решает маска `spatialAudio` в каталоге;
+    /// биты объявлены в таблице донора `SPATIAL_AUDIO_MODES`. «Выключено»
+    /// доступно всегда и бита не имеет.
+    public enum SpatialMode: UInt8, CaseIterable {
+        case off = 0
+        case headTracked = 1
+        case fixed = 2
+        case concert = 3
+        case theatre = 4
+        case game = 5
+
+        /// Как режим выглядит на проводе.
+        public var wire: (mode: UInt8, head: UInt8) {
+            switch self {
+            case .off:         return (0, 0)
+            case .headTracked: return (1, 1)
+            case .fixed:       return (1, 0)
+            case .concert:     return (2, 0)
+            case .theatre:     return (3, 0)
+            case .game:        return (4, 0)
+            }
+        }
+
+        /// Бит маски `spatialAudio`, открывающий режим. У «выключено» его нет:
+        /// оно доступно всегда.
+        public var maskBit: Int? {
+            switch self {
+            case .off:         return nil
+            case .headTracked: return 0x01
+            case .fixed:       return 0x02
+            case .concert:     return 0x08
+            case .theatre:     return 0x10
+            case .game:        return 0x20
+            }
+        }
+    }
+
+    public static func parseSpatial(_ frame: Frame) -> SpatialMode? {
+        guard let mode = frame.payload.first else { return nil }
+        let head = frame.payload.count > 1 ? frame.payload[1] : 0
+        // Порядок проверок — как у донора: голова выигрывает до поиска по
+        // режиму, иначе `mode == 1` вернуло бы «фиксированный» и для неё.
+        if head == 1 { return .headTracked }
+        return SpatialMode.allCases.first { $0.wire.head == 0 && $0.wire.mode == mode } ?? .off
+    }
+
+    public static func encodeSetSpatial(_ mode: SpatialMode, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setSpatialAudio.rawValue,
+                     operationID: operationID,
+                     payload: [mode.wire.mode, mode.wire.head]))
+    }
+
+    /// Кодек, ответ `0x4029` и запись `0xF01C`: один байт — номер в списке.
+    ///
+    /// ⚠ Смена кодека **перезагружает наушники**: донор на записи показывает
+    /// «Rebooting…» и ждёт переподключения. Это не наша догадка про устройство,
+    /// а его собственное поведение, выраженное в чужом интерфейсе.
+    ///
+    /// Какие кодеки доступны модели — маска `highQualityAudio` из каталога;
+    /// AAC есть всегда и бита не имеет.
+    public enum Codec: UInt8, CaseIterable {
+        case aac = 0
+        case lhdc = 1
+        case ldac = 2
+
+        public var maskBit: Int? {
+            switch self {
+            case .aac:  return nil
+            case .lhdc: return 0x02
+            case .ldac: return 0x04
+            }
+        }
+
+        /// Имя кодека не переводится: это название формата.
+        public var title: String {
+            switch self {
+            case .aac:  return "AAC"
+            case .lhdc: return "LHDC"
+            case .ldac: return "LDAC"
+            }
+        }
+    }
+
+    public static func parseCodec(_ frame: Frame) -> Codec? {
+        frame.payload.first.flatMap { Codec(rawValue: $0) }
+    }
+
+    public static func encodeSetCodec(_ codec: Codec, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setHighQualityAudio.rawValue,
+                     operationID: operationID,
+                     payload: [codec.rawValue]))
+    }
+
+    /// Одно устройство в списке пар. Адрес наружу не показывается **никогда**:
+    /// он нужен только чтобы адресовать подключение, а на экране от него
+    /// пользы нет. Имя показывается — это его собственные устройства.
+    public struct DualDevice: Equatable {
+        public let address: [UInt8]
+        public let name: String
+        /// Мы сами. Такую строку не отключают: отключишь — потеряешь связь,
+        /// которой отключал.
+        public let isSelf: Bool
+        public let isConnected: Bool
+    }
+
+    /// Список пар, ответ `0x4028`.
+    ///
+    /// Формат записи: `[признаки][адрес 6][длина имени][имя]`. В признаках
+    /// старший полубайт — «это мы», младший — «подключено». Длина имени берётся
+    /// с маской `0x7f`: старший бит занят чем-то ещё, и донор его отбрасывает.
+    ///
+    /// Первые два байта payload донор не читает вовсе; счётчик записей — третий.
+    /// Список приходит **страницами**: следующий запрос несёт число уже
+    /// известных устройств, и так пока не перестанут появляться новые.
+    public static func parseDualList(_ frame: Frame) -> [DualDevice] {
+        let p = frame.payload
+        guard p.count >= 3 else { return [] }
+        var out: [DualDevice] = []
+        var offset = 3
+        for _ in 0..<Int(p[2]) {
+            guard offset + 8 <= p.count else { break }
+            let flags = p[offset]
+            let length = Int(p[offset + 7] & 0x7F)
+            guard offset + 8 + length <= p.count else { break }
+            out.append(.init(address: Array(p[(offset + 1)..<(offset + 7)]),
+                             name: String(decoding: p[(offset + 8)..<(offset + 8 + length)],
+                                          as: UTF8.self),
+                             isSelf: flags & 0xF0 != 0,
+                             isConnected: flags & 0x0F != 0))
+            offset += 8 + length
+        }
+        return out
+    }
+
+    /// Запрос очередной страницы списка: сколько устройств уже известно.
+    public static func encodeRequestDualList(known: Int, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.dualList.rawValue, operationID: operationID,
+                     payload: [UInt8(known & 0xFF)]))
+    }
+
+    public static func encodeSetDualEnabled(_ on: Bool, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setDualEnabled.rawValue, operationID: operationID,
+                     payload: [on ? 1 : 0]))
+    }
+
+    public static func encodeSetDualConnect(address: [UInt8], connect: Bool,
+                                            operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setDualConnect.rawValue, operationID: operationID,
+                     payload: [connect ? 1 : 0] + address))
+    }
+
+    /// Персональный звук — выключатель профиля, построенного в телефонном
+    /// приложении. Читается одним байтом, пишется одним байтом.
+    ///
+    /// Команда зависит от поставщика профиля, и его выбирает каталог:
+    /// `0xC022`/`0xF015` у Mimi, `0xC05A`/`0xF05C` у Audiodo. Кодек знает
+    /// форму, но не знает, кому её слать, — и это правильное разделение.
+    public static func encodeSetPersonalSound(_ on: Bool, command: UInt16,
+                                              operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: command, operationID: operationID, payload: [on ? 1 : 0]))
+    }
+
+    /// Куда адресован поиск устройства, запись `0xF002`.
+    ///
+    /// У донора это три ветки по имени модели, но числа в них не случайные:
+    /// первый байт — идентификатор части устройства, тот же, что в ответе
+    /// заряда (`2` левый, `3` правый, `6` полноразмерные). У B181 адресного
+    /// байта нет вовсе, и это единственная настоящая особенность формы.
+    /// Какие адреса есть у модели — говорит каталог, кодек их не выбирает.
+    public enum RingTarget: Equatable, Hashable {
+        /// Без адреса: один байт «звони / перестань».
+        case whole
+        /// С адресом части устройства.
+        case component(UInt8)
+    }
+
+    public static func encodeRingDevice(_ target: RingTarget, on: Bool,
+                                        operationID: UInt8) -> [UInt8] {
+        let payload: [UInt8]
+        switch target {
+        case .whole:             payload = [on ? 1 : 0]
+        case .component(let id): payload = [id, on ? 1 : 0]
+        }
+        return encode(Frame(command: Command.ringDevice.rawValue,
+                            operationID: operationID, payload: payload))
     }
 
     /// Запись `0xF00A`: время в секундах эпохи, **big-endian** — в отличие от

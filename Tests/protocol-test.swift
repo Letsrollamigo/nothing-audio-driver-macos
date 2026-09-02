@@ -287,6 +287,117 @@ struct ProtocolTest {
         let noise = bytes("aabbcc") + bytes("55600107400300010106558bb5")
         check(NothingProtocol.split(noise).frames.count == 1, "мусор перед кадром пропускается")
 
+        // --- детекция в ухе, задержка, пространственный звук, кодек
+        // Кадры — из общего обхода B170 (`Protocol/sweep-b170-fw1.0.1.81.txt`).
+        let settingsBlock = try! NothingProtocol.decode(
+            bytes("5560010e4013000b0901010201070109010a010b000e0112011501da3f"))
+        check(NothingProtocol.parseInEarDetection(settingsBlock) == true,
+              "детекция в ухе достаётся из блока настроек по идентификатору")
+        check(NothingProtocol.parseSettings(settingsBlock).count == 9,
+              "в блоке настроек B170 девять записей")
+
+        let inEarOff = NothingProtocol.encodeSetInEarDetection(false, operationID: 1)
+        check(try! NothingProtocol.decode(inEarOff).payload == [0x01, 0x01, 0x00],
+              "запись детекции в ухе — одна запись блока настроек, а не голый признак")
+
+        // Задержка: включено 1, выключено 2. Ноля на проводе не бывает.
+        //
+        // Кадр снят 31.08, когда режим был включён, — а в общем обходе того же
+        // дня стоит `02`. Расхождение не в формате, а в состоянии: между двумя
+        // снимками режим переключали. Ровно та ловушка, что с нулями кривой.
+        let latencyOn = try! NothingProtocol.decode(bytes("556001414001000c0114a9"))
+        check(NothingProtocol.parseLatency(latencyOn) == true,
+              "единица в ответе задержки — это включено")
+        check(NothingProtocol.parseLatency(
+                .init(command: 0x4041, operationID: 1, payload: [2])) == false,
+              "двойка — выключено, и это не ноль")
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeSetLatency(true, operationID: 1)).payload == [0x01, 0x00],
+              "включение задержки пишет единицу")
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeSetLatency(false, operationID: 1)).payload == [0x02, 0x00],
+              "а выключение — двойку, не ноль")
+
+        // Пространственный звук: два байта, и «следит за головой» отличается
+        // от «фиксированного» только вторым.
+        let spatialOff = try! NothingProtocol.decode(bytes("5560014f400200070000729d"))
+        check(NothingProtocol.parseSpatial(spatialOff) == .off,
+              "нули в ответе пространственного звука — это выключено")
+        check(NothingProtocol.parseSpatial(
+                .init(command: 0x404F, operationID: 1, payload: [1, 1])) == .headTracked,
+              "единица во втором байте — слежение за головой")
+        check(NothingProtocol.parseSpatial(
+                .init(command: 0x404F, operationID: 1, payload: [1, 0])) == .fixed,
+              "тот же первый байт с нулём во втором — фиксированный режим")
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeSetSpatial(.headTracked, operationID: 1)).payload == [1, 1],
+              "запись слежения за головой несёт оба байта")
+
+        // Кодек: номер в списке, AAC нулевой.
+        let codecAAC = try! NothingProtocol.decode(bytes("556001294001000600db21"))
+        check(NothingProtocol.parseCodec(codecAAC) == .aac, "ноль в ответе кодека — это AAC")
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeSetCodec(.ldac, operationID: 1)).payload == [2],
+              "запись кодека — один байт с номером")
+
+        // Поиск устройства: адрес части, а не форм-фактор.
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeRingDevice(.component(6), on: true, operationID: 1)).payload
+                == [0x06, 0x01],
+              "звонок полноразмерным адресуется шестёркой — тем же числом, что заряд")
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeRingDevice(.component(2), on: false, operationID: 1)).payload
+                == [0x02, 0x00],
+              "и левой затычке двойкой, с нулём на «замолчи»")
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeRingDevice(.whole, on: true, operationID: 1)).payload
+                == [0x01],
+              "а без адреса остаётся один байт — форма B181")
+
+        // Список пар: записи переменной длины, признаки полубайтами.
+        // Кадр собран руками — настоящий в захваты не кладём, в нём адреса
+        // и имена чужих устройств.
+        let dualPayload: [UInt8] =
+            [0x00, 0x00, 0x02]
+            + [0x11, 1, 2, 3, 4, 5, 6, 0x83] + Array("Mac".utf8)
+            + [0x01, 10, 11, 12, 13, 14, 15, 0x05] + Array("Phone".utf8)
+        let dualList = NothingProtocol.parseDualList(
+            .init(command: 0x4028, operationID: 1, payload: dualPayload))
+        check(dualList.count == 2, "две записи списка пар разбираются обе")
+        check(dualList.first?.name == "Mac" && dualList.first?.isSelf == true
+                && dualList.first?.isConnected == true,
+              "старший полубайт признаков — «это мы», младший — «подключено»")
+        check(dualList.first?.address == [1, 2, 3, 4, 5, 6],
+              "адрес берётся шестью байтами сразу после признаков")
+        check(dualList.last?.name == "Phone" && dualList.last?.isSelf == false,
+              "вторая запись читается со сдвигом на длину первой")
+        check(NothingProtocol.parseDualList(
+                .init(command: 0x4028, operationID: 1, payload: [0x00, 0x00])).isEmpty,
+              "обрезанный ответ отдаёт пустой список, а не падает")
+
+        check(try! NothingProtocol.decode(
+                NothingProtocol.encodeSetDualConnect(address: [1, 2, 3, 4, 5, 6], connect: true,
+                                                     operationID: 1)).payload
+                == [1, 1, 2, 3, 4, 5, 6],
+              "подключение к паре несёт признак и адрес следом")
+
+        // --- таблица строк
+        //
+        // Проверка выглядит бессмысленной, но ловит настоящую аварию: словарь
+        // с повторяющимся ключом компилируется молча и падает ловушкой при
+        // первом обращении. Один раз это уже уронило приложение у владельца —
+        // ключ «Connect» оказался и на экране подключения, и в списке пар.
+        // Обращение к таблице здесь и есть проверка.
+        // Язык сохраняется в UserDefaults, поэтому его возвращаем: у тестового
+        // бинарника свой домен настроек, но полагаться на это не стоит.
+        let language = Strings.shared.language
+        Strings.shared.language = .russian
+        check(t("Connect") == "Подключить", "таблица строк собирается без дублей ключей")
+        check(t("Noise cancellation") == "Шумоподавление", "и переводит по-русски")
+        Strings.shared.language = .english
+        check(t("Connect") == "Connect", "английский отдаёт ключ как есть")
+        Strings.shared.language = language
+
         // --- каталог: словарь команд и таблица возможностей моделей
         catalog()
 
@@ -352,8 +463,8 @@ struct ProtocolTest {
         // Проверять на nil мало: nil получится и если полоса выбрана верно, и
         // если не выбрана ни одна. Спрашиваем положительно — сколько флагов
         // в старой полосе, — иначе проверка пройдёт при сломанном выборе.
-        check(NothingCatalog.flags(model: b170, firmware: "1.0.1.74").count == 12,
-              "на 1.0.1.74 у B170 берётся старая полоса — двенадцать возможностей",
+        check(NothingCatalog.flags(model: b170, firmware: "1.0.1.74").count == 13,
+              "на 1.0.1.74 у B170 берётся старая полоса — тринадцать возможностей",
               "\(NothingCatalog.flags(model: b170, firmware: "1.0.1.74").count)")
         check(NothingCatalog.flags(model: b170, firmware: "1.0.1.74")[.audiodo] == nil,
               "и персонального звука среди них ещё нет")
@@ -699,6 +810,44 @@ struct ProtocolTest {
               "у профилей 6 — своя кривая")
         check(NothingProtocol.EqualiserPreset(rawValue: 6) == nil,
               "а среди пресетов значения 6 нет: там это переключатель, не пресет")
+
+        // Маски возможностей: список режимов и кодеков — данные модели,
+        // а не общий для всех набор.
+        check(NothingCatalog.spatialModes(model: "B170", firmware: "1.0.1.81")
+                == [.off, .headTracked, .fixed],
+              "у B170 маска 7 открывает слежение и фиксированный, но не концерт")
+        check(NothingCatalog.codecs(model: "B170", firmware: "1.0.1.81") == [.aac, .ldac],
+              "у B170 маска кодеков 4 — это LDAC, без LHDC")
+        check(NothingCatalog.spatialModes(model: "B187", firmware: "1.0.0.1")
+                == [.off, .fixed],
+              "у B187 маска 6 даёт фиксированный без слежения, а бит 0x04 в таблице ничей")
+        check(NothingCatalog.spatialModes(model: "B181", firmware: "1.0.0.1") == [.off],
+              "без маски вовсе остаётся одно «выключено» — контрол показывать нечему")
+
+        // Поиск устройства: три формы записи, и все три — данные каталога.
+        check(NothingCatalog.ringTargets(model: "B170", firmware: "1.0.1.81") == [.component(6)],
+              "у B170 звонить некуда, кроме самих наушников")
+        check(NothingCatalog.ringTargets(model: "B181", firmware: "1.0.0.1") == [.whole],
+              "у B181 адресного байта нет вовсе")
+        let buds = NothingCatalog.ringTargets(model: "B162", firmware: "1.0.0.1")
+        check(buds.isEmpty || buds == [.component(2), .component(3)],
+              "у затычек либо две стороны, либо поиска нет вовсе — третьего не бывает")
+        // Перезагрузка при смене режима двух устройств — свой флаг. У B170
+        // режим есть, а перезагрузки нет, и это снято проводом: канал при
+        // переключении не рвался. Подпись в интерфейсе идёт по флагу.
+        let b170flags = NothingCatalog.flags(model: "B170", firmware: "1.0.1.81")
+        check(b170flags[.dualConnection] == 1, "у B170 режим двух устройств есть")
+        check(b170flags[.dualConnectionReboot] == 0, "а перезагрузки при его смене нет")
+
+        check(NothingCatalog.ringTargets(model: "B187", firmware: "1.0.0.1").isEmpty,
+              "модель без findDevice кнопки не получает")
+
+        // Персональный звук: поставщик профиля выбирается каталогом, и у B170
+        // он появляется вместе с прошивкой, а не вместе с моделью.
+        check(NothingCatalog.personalSound(model: "B170", firmware: "1.0.1.81")?.write == 0xF05C,
+              "у B170 на свежей прошивке поставщик Audiodo")
+        check(NothingCatalog.personalSound(model: "B170", firmware: "1.0.1.74") == nil,
+              "а на прошивке до 1.0.1.75 персонального звука нет вовсе")
     }
 
     static func finish() {

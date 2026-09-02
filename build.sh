@@ -11,8 +11,32 @@ MODE="${1:-}"
 if [ "$MODE" = "--test" ]; then
     TMP="$(mktemp -d)"
     swiftc -O Sources/SiteUpdater.swift Tests/normalize-test.swift -o "$TMP/normalize"
-    swiftc -O Sources/NothingProtocol.swift Sources/NothingCatalog.swift Tests/protocol-test.swift -o "$TMP/protocol"
-    echo "— нормализация путей"; "$TMP/normalize" || exit 1
+    # Localisation вошёл в набор не ради переводов, а ради одной ошибки, которая
+    # иначе видна только пользователю: словарь-литерал с повторяющимся ключом
+    # компилируется молча и падает при первом обращении. Проверка — само
+    # обращение к таблице.
+    swiftc -O Sources/NothingProtocol.swift Sources/NothingCatalog.swift \
+        Sources/Localisation.swift Tests/protocol-test.swift -o "$TMP/protocol"
+    # Дубль ключа в таблице строк компилируется молча и убивает приложение
+    # ловушкой при первом обращении — так уже случилось дважды за один вечер.
+    # Проверка статическая: ловушка в тестовом бинарнике роняет его целиком и
+    # выглядит непонятно, а здесь видно и ключ, и файл.
+    echo "— таблица строк"
+    python3 - <<'DUPCHECK' || exit 1
+import io, re, sys
+body = io.open("Sources/Localisation.swift", encoding="utf-8").read()
+body = body[body.index("russian"):]
+seen, dups = {}, []
+for m in re.finditer(r'"((?:[^"\\]|\\.)*)"\s*:', body):
+    k = m.group(1)
+    if k in seen: dups.append(k)
+    seen[k] = True
+if dups:
+    print("ПЛОХО  повторяющиеся ключи в таблице строк: " + ", ".join(sorted(set(dups))))
+    sys.exit(1)
+print("ок    ключей %d, повторов нет" % len(seen))
+DUPCHECK
+    echo; echo "— нормализация путей"; "$TMP/normalize" || exit 1
     echo; echo "— протокол на записанных кадрах"; exec "$TMP/protocol"
 fi
 
