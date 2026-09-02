@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // Нативный экран приложения. С 02.09.2026 он основной: обычный запуск идёт
@@ -123,6 +124,11 @@ final class DeviceLink: ObservableObject {
     /// команды устройству вообще имеет смысл слать.
     var onFirmware: (String) -> Void = { _ in }
 
+    /// Связь потеряна насовсем. Нужно тем, кто держит состояние, которого
+    /// на устройстве не спросить, — например поиску: он звенит, а сказать
+    /// ему «замолчи» уже нечем.
+    var onLost: () -> Void = {}
+
     private let bridge = SerialBridge()
     private var operationID: UInt8 = 0
 
@@ -176,6 +182,16 @@ final class DeviceLink: ObservableObject {
         // только когда восстановить не удалось.
         bridge.onClosed = { [weak self] in
             self?.status = .lost("connection lost")
+            self?.onLost()
+        }
+        // А когда удалось — переспрашиваем всё заново. Молчаливое
+        // восстановление правильно для сайта и неверно для нас: после
+        // перезагрузки наушников их состояние могло измениться целиком,
+        // и показывать прежнее как настоящее было бы враньём.
+        bridge.onRestored = { [weak self] in
+            guard let self else { return }
+            self.status = .ready
+            self.onReady()
         }
     }
 
@@ -239,6 +255,10 @@ final class DeviceLink: ObservableObject {
     }
 
     func send(_ frame: [UInt8]) { bridge.write(frame) }
+
+    /// Отпустить канал. Устройство отдаёт его одной программе за раз, поэтому
+    /// пока мы его держим, к наушникам не подключится больше никто.
+    func close() { bridge.close() }
 
     /// Запрос без payload — самая частая форма.
     func request(_ command: NothingProtocol.Command) {
@@ -326,7 +346,12 @@ final class SoundStore: ObservableObject {
     /// секция баса в этом случае не показывается вовсе.
     @Published private(set) var bass: (enabled: Bool, level: Int)?
     @Published private(set) var pendingBass: (enabled: Bool, level: Int)?
-    @Published private(set) var spatialActive = false
+    /// Пространственный звук — режим, а не признак: «следит за головой» это
+    /// тот же первый режим со вторым байтом, и булевым его не выразить.
+    @Published private(set) var spatial: NothingProtocol.SpatialMode?
+    @Published private(set) var pendingSpatial: NothingProtocol.SpatialMode?
+    /// Режимы, доступные модели; наполняется владельцем по каталогу.
+    @Published var spatialModes: [NothingProtocol.SpatialMode] = []
     /// Кривая продвинутого эквалайзера — рабочая копия. Пока ползунок ещё
     /// не отпущен и запись не ушла, показываем своё, а не то, что на
     /// устройстве: иначе значение прыгало бы назад посреди перетаскивания.
@@ -341,9 +366,26 @@ final class SoundStore: ObservableObject {
     /// Выставляется владельцем, когда известны модель и прошивка.
     var mutuallyExclusive = false
 
+    /// Пространственный звук включён — в этом виде его спрашивает секция баса.
+    /// Ждущая запись считается включённой сразу: иначе на время подтверждения
+    /// бас остался бы доступен, и человек успел бы нажать заведомо отказное.
+    var spatialActive: Bool { (pendingSpatial ?? spatial ?? .off) != .off }
+
+    /// Гейт донора, симметричный: он блокирует не только бас при включённом
+    /// пространственном звуке, но и пространственный звук при включённом басе
+    /// или расширенном эквалайзере. Одну половину экран уже соблюдал.
+    var spatialBlocked: Bool {
+        mutuallyExclusive && ((bass?.enabled ?? false) || advancedOn)
+    }
+
     private unowned let link: DeviceLink
 
     init(link: DeviceLink) { self.link = link }
+
+    func setSpatial(_ mode: NothingProtocol.SpatialMode) {
+        pendingSpatial = mode
+        link.send(NothingProtocol.encodeSetSpatial(mode, operationID: link.nextOperationID()))
+    }
 
     func setPreset(_ preset: NothingProtocol.EqualiserPreset) {
         pendingPreset = preset
@@ -421,8 +463,194 @@ final class SoundStore: ObservableObject {
             // разу; интерфейс, как у донора, начинает шкалу с единицы.
             bass = (value.enabled, max(1, min(5, value.level)))
             pendingBass = nil
+        // Подтверждение записи пространственного звука. Перечитываем и бас:
+        // у моделей с взаимоисключением он гаснет не по нашей команде, и
+        // соседнее поле обязано быть снято, а не додумано.
+        case 0x7052:
+            link.request(.spatialAudio)
+            link.request(.bassEnhance)
         case 0x404F:
-            spatialActive = (NothingProtocol.parseSingleValue(frame) ?? 0) != 0
+            spatial = NothingProtocol.parseSpatial(frame)
+            pendingSpatial = nil
+        default: break
+        }
+    }
+}
+
+/// Поведение устройства: пауза при снятии и режим низкой задержки. Оба —
+/// тумблеры, оба читаются и пишутся, и оба ничего не знают о звуке, поэтому
+/// живут отдельно от `SoundStore`, а не внутри него.
+///
+/// Кодек тут же, но особый: его запись **перезагружает наушники**. Ответа на
+/// перечитывание после неё ждать бесполезно — канал рвётся вместе с
+/// устройством. Состояние возвращается само, когда мост поднимет канал и
+/// `DeviceLink` переспросит всё заново.
+final class DeviceSettingsStore: ObservableObject {
+    /// nil — устройство ещё не ответило или команда ему недоступна; секция
+    /// тогда не показывается вовсе, как и у звука.
+    @Published private(set) var inEar: Bool?
+    @Published private(set) var pendingInEar: Bool?
+    @Published private(set) var latency: Bool?
+    @Published private(set) var pendingLatency: Bool?
+    @Published private(set) var codec: NothingProtocol.Codec?
+    @Published private(set) var pendingCodec: NothingProtocol.Codec?
+    /// Кодеки, доступные модели; наполняется владельцем по каталогу.
+    /// Один кодек — выбирать не из чего, секции нет.
+    @Published var codecs: [NothingProtocol.Codec] = []
+    /// Подключение к двум устройствам: выключатель и список пар.
+    @Published private(set) var dualEnabled: Bool?
+    @Published private(set) var pendingDual: Bool?
+    @Published private(set) var dualDevices: [NothingProtocol.DualDevice] = []
+    /// Перезагружаются ли наушники при смене режима. **Отдельный флаг**, а не
+    /// следствие поддержки режима: у B170 его нет, и провод это подтвердил —
+    /// канал при переключении не рвался. Обещание перезагрузки без флага было
+    /// бы враньём, скопированным у донора вместе с его гейтом.
+    @Published var dualReboots = false
+    /// Список приходит страницами, и запросы надо чем-то ограничить: у донора
+    /// потолок двадцать страниц, у нас тот же.
+    private var dualPages = 0
+
+    @Published private(set) var personalSound: Bool?
+    @Published private(set) var pendingPersonalSound: Bool?
+    /// Какими командами читается и пишется персональный звук у этой модели;
+    /// nil — не умеет вовсе. Наполняется владельцем по каталогу.
+    var personalSoundCommands: (read: UInt16, write: UInt16)?
+    /// Куда можно звонить при поиске; пустой список — модель не умеет.
+    @Published var ringTargets: [NothingProtocol.RingTarget] = []
+    /// Что звенит прямо сейчас. Устройство об окончании не сообщает, поэтому
+    /// это наше представление о происходящем, а не снятое состояние.
+    @Published private(set) var ringing: NothingProtocol.RingTarget?
+
+    private unowned let link: DeviceLink
+
+    init(link: DeviceLink) { self.link = link }
+
+    func setInEar(_ on: Bool) {
+        pendingInEar = on
+        link.send(NothingProtocol.encodeSetInEarDetection(on, operationID: link.nextOperationID()))
+    }
+
+    func setLatency(_ on: Bool) {
+        pendingLatency = on
+        link.send(NothingProtocol.encodeSetLatency(on, operationID: link.nextOperationID()))
+    }
+
+    /// Позвонить или замолчать. Звонит ровно одна часть за раз: две
+    /// одновременно звенящие затычки различить на слух невозможно, а
+    /// «найти левую» — весь смысл затеи.
+    func ring(_ target: NothingProtocol.RingTarget, _ on: Bool) {
+        if on, let ringing, ringing != target { stopRinging(ringing) }
+        ringing = on ? target : nil
+        link.send(NothingProtocol.encodeRingDevice(target, on: on,
+                                                   operationID: link.nextOperationID()))
+    }
+
+    private func stopRinging(_ target: NothingProtocol.RingTarget) {
+        link.send(NothingProtocol.encodeRingDevice(target, on: false,
+                                                   operationID: link.nextOperationID()))
+    }
+
+    /// Связь пропала — звонок не остановить и не подтвердить. Честнее забыть
+    /// о нём, чем оставить кнопку в состоянии «звенит» навсегда.
+    func forgetRinging() { ringing = nil }
+
+    /// Выключатель режима. ⚠ Перезагружает наушники, как и смена кодека:
+    /// подтверждение приходит до перезагрузки, перечитывать по нему нечего.
+    func setDualEnabled(_ on: Bool) {
+        pendingDual = on
+        link.send(NothingProtocol.encodeSetDualEnabled(on, operationID: link.nextOperationID()))
+    }
+
+    func setDualConnect(_ device: NothingProtocol.DualDevice, _ connect: Bool) {
+        link.send(NothingProtocol.encodeSetDualConnect(address: device.address, connect: connect,
+                                                       operationID: link.nextOperationID()))
+    }
+
+    /// Спросить список с начала.
+    func requestDualList() {
+        dualDevices = []
+        dualPages = 0
+        requestNextDualPage()
+    }
+
+    private func requestNextDualPage() {
+        dualPages += 1
+        link.send(NothingProtocol.encodeRequestDualList(known: dualDevices.count,
+                                                        operationID: link.nextOperationID()))
+    }
+
+    func setPersonalSound(_ on: Bool) {
+        guard let write = personalSoundCommands?.write else { return }
+        pendingPersonalSound = on
+        link.send(NothingProtocol.encodeSetPersonalSound(on, command: write,
+                                                         operationID: link.nextOperationID()))
+    }
+
+    func setCodec(_ codec: NothingProtocol.Codec) {
+        pendingCodec = codec
+        link.send(NothingProtocol.encodeSetCodec(codec, operationID: link.nextOperationID()))
+    }
+
+    func apply(_ frame: NothingProtocol.Frame) {
+        switch frame.command {
+        // Подтверждения записи значений не несут — применённое видно чтением.
+        case 0x7004: link.request(.inEarDetection)
+        case 0x7040: link.request(.latencyMode)
+        case 0x400E:
+            // Ответ несёт весь блок настроек, а не одну запись: детекция в ухе
+            // лежит в нём под своим идентификатором, остальные пока без имени.
+            guard let value = NothingProtocol.parseInEarDetection(frame) else { return }
+            inEar = value
+            pendingInEar = nil
+        case 0x4041:
+            latency = NothingProtocol.parseLatency(frame)
+            pendingLatency = nil
+        case 0x4027:
+            dualEnabled = NothingProtocol.parseSingleValue(frame) == 1
+            pendingDual = nil
+        case 0x4028:
+            // Страница списка. Новые устройства дописываем, известные обновляем;
+            // пока страница приносит новое — просим следующую.
+            var added = false
+            for device in NothingProtocol.parseDualList(frame) {
+                if let i = dualDevices.firstIndex(where: { $0.address == device.address }) {
+                    dualDevices[i] = device
+                } else {
+                    dualDevices.append(device)
+                    added = true
+                }
+            }
+            if added && dualPages < 20 { requestNextDualPage() }
+        // Подключение к паре списка не меняет — перечитываем его целиком.
+        case 0x701B: requestDualList()
+        // Незапрошенное событие о паре. Приходит ли оно у B170 — не проверено,
+        // как и прочие push; разбор дешёвый, и если придёт, список обновится.
+        case 0xE019:
+            let p = frame.payload
+            guard p.count >= 7 else { return }
+            let address = Array(p[1..<7])
+            if let i = dualDevices.firstIndex(where: { $0.address == address }) {
+                let old = dualDevices[i]
+                dualDevices[i] = .init(address: old.address, name: old.name,
+                                       isSelf: old.isSelf, isConnected: p[0] == 1)
+            } else {
+                requestDualList()
+            }
+        // Ответ и подтверждение персонального звука — у каждого поставщика
+        // профиля свои коды, поэтому сравниваем с тем, что выбрал каталог.
+        case personalSoundCommands.map({ $0.read & 0x7FFF | 0x4000 }):
+            personalSound = NothingProtocol.parseSingleValue(frame) == 1
+            pendingPersonalSound = nil
+        case personalSoundCommands.map({ $0.write & 0x7FFF | 0x7000 }):
+            if let read = personalSoundCommands?.read,
+               let command = NothingProtocol.Command(rawValue: read) { link.request(command) }
+        // Подтверждение смены кодека приходит ДО перезагрузки, поэтому
+        // перечитывать по нему нечего: ответ уже некому будет прислать.
+        // Ждём восстановления канала — оно переспросит само.
+        case 0x701C: break
+        case 0x4029:
+            codec = NothingProtocol.parseCodec(frame)
+            pendingCodec = nil
         default: break
         }
     }
@@ -919,6 +1147,11 @@ private func hertz(_ value: Float) -> String {
 struct AdvancedEQSection: View {
     let curve: NothingProtocol.EQCurve
     let active: Bool
+    /// Взаимоисключение, третья его нога: у моделей с флагом расширенный
+    /// эквалайзер не живёт вместе с пространственным звуком. Гейт нужен
+    /// именно здесь, а не только на тумблере: движение ползунка шлёт
+    /// `0xF050`, а он включает расширенный эквалайзер сам.
+    let blocked: Bool
     let enabled: Bool
     @Binding var selected: Int
     let setActive: (Bool) -> Void
@@ -928,30 +1161,40 @@ struct AdvancedEQSection: View {
         selected < curve.bands.count ? curve.bands[selected] : nil
     }
 
+    private var off: Bool { !enabled || blocked }
+
+    @ViewBuilder
+    private func gain(at index: Int) -> some View {
+        if index < curve.bands.count {
+            let band = curve.bands[index]
+            LabeledContent(hertz(band.frequency)) {
+                HStack(spacing: 10) {
+                    Slider(value: Binding(
+                        get: { Double(band.gain) },
+                        set: { setBand(index, .init(filterType: band.filterType,
+                                                    gain: Float($0),
+                                                    frequency: band.frequency,
+                                                    quality: band.quality)) }),
+                        in: AdvancedEQLimits.gain, step: 0.5)
+                        .frame(width: 240)
+                    Text(String(format: "%+.1f %@", band.gain, t("dB")))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 66, alignment: .trailing)
+                }
+            }
+            .disabled(off)
+        }
+    }
+
     var body: some View {
         Section(t("Advanced equaliser")) {
             Toggle(t("Advanced equaliser"), isOn: Binding(
                 get: { active }, set: setActive))
-                .disabled(!enabled)
+                .disabled(off)
 
-            ForEach(Array(curve.bands.enumerated()), id: \.offset) { index, band in
-                LabeledContent(hertz(band.frequency)) {
-                    HStack(spacing: 10) {
-                        Slider(value: Binding(
-                            get: { Double(band.gain) },
-                            set: { setBand(index, .init(filterType: band.filterType,
-                                                        gain: Float($0),
-                                                        frequency: band.frequency,
-                                                        quality: band.quality)) }),
-                            in: AdvancedEQLimits.gain, step: 0.5)
-                            .frame(width: 240)
-                        Text(String(format: "%+.1f %@", band.gain, t("dB")))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 66, alignment: .trailing)
-                    }
-                }
-                .disabled(!enabled)
+            ForEach(0..<curve.bands.count, id: \.self) { index in
+                gain(at: index)
             }
 
             if let band {
@@ -960,47 +1203,51 @@ struct AdvancedEQSection: View {
                         Text(hertz(each.frequency)).tag(index)
                     }
                 }
-                .disabled(!enabled)
+                .disabled(off)
 
-                LabeledContent(t("Frequency")) {
-                    HStack(spacing: 10) {
-                        Slider(value: Binding(
-                            get: { Double(band.frequency) },
-                            set: { setBand(selected, .init(filterType: band.filterType,
-                                                           gain: band.gain,
-                                                           frequency: Float($0),
-                                                           quality: band.quality)) }),
-                            in: AdvancedEQLimits.bands[min(selected, AdvancedEQLimits.bands.count - 1)],
-                            step: 1)
-                            .frame(width: 240)
-                        Text(hertz(band.frequency))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 66, alignment: .trailing)
+                Group {
+                    LabeledContent(t("Frequency")) {
+                        HStack(spacing: 10) {
+                            Slider(value: Binding(
+                                get: { Double(band.frequency) },
+                                set: { setBand(selected, .init(filterType: band.filterType,
+                                                               gain: band.gain,
+                                                               frequency: Float($0),
+                                                               quality: band.quality)) }),
+                                in: AdvancedEQLimits.bands[min(selected, AdvancedEQLimits.bands.count - 1)],
+                                step: 1)
+                                .frame(width: 240)
+                            Text(hertz(band.frequency))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 66, alignment: .trailing)
+                        }
+                    }
+                    LabeledContent(t("Q factor")) {
+                        HStack(spacing: 10) {
+                            Slider(value: Binding(
+                                get: { Double(band.quality) },
+                                set: { setBand(selected, .init(filterType: band.filterType,
+                                                               gain: band.gain,
+                                                               frequency: band.frequency,
+                                                               quality: Float($0))) }),
+                                in: AdvancedEQLimits.quality, step: 0.1)
+                                .frame(width: 240)
+                            Text(String(format: "%.1f", band.quality))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 66, alignment: .trailing)
+                        }
                     }
                 }
-                .disabled(!enabled)
-
-                LabeledContent(t("Q factor")) {
-                    HStack(spacing: 10) {
-                        Slider(value: Binding(
-                            get: { Double(band.quality) },
-                            set: { setBand(selected, .init(filterType: band.filterType,
-                                                           gain: band.gain,
-                                                           frequency: band.frequency,
-                                                           quality: Float($0))) }),
-                            in: AdvancedEQLimits.quality, step: 0.1)
-                            .frame(width: 240)
-                        Text(String(format: "%.1f", band.quality))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 66, alignment: .trailing)
-                    }
-                }
-                .disabled(!enabled)
+                .disabled(off)
             }
 
-            if !active {
+            if blocked {
+                Text(t("Not available while spatial audio is on."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else if !active {
                 // Запись значений включает продвинутый эквалайзер сама —
                 // проверено железом. Честнее сказать это заранее, чем дать
                 // тумблеру перещёлкнуться будто бы сам собой.
@@ -1045,6 +1292,184 @@ struct BassSection: View {
                 // Гейт донора, повторённый по флагу модели: у B170 бас и
                 // пространственный звук не живут одновременно.
                 Text(t("Not available while spatial audio is on."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Подпись режима пространственного звука. Живёт в экране, а не в кодеке:
+/// кодек знает байты, а как это назвать человеку — забота интерфейса.
+func title(_ mode: NothingProtocol.SpatialMode) -> String {
+    switch mode {
+    case .off:         return t("Off")
+    case .headTracked: return t("Head tracking")
+    case .fixed:       return t("Fixed")
+    case .concert:     return t("Concert")
+    case .theatre:     return t("Theatre")
+    case .game:        return t("Game")
+    }
+}
+
+/// Пространственный звук. Состав режимов — из каталога по маске модели:
+/// у B170 это «выключено», «следит за головой» и «фиксированный», а концерта,
+/// театра и игры нет, хотя протокол их выражает.
+struct SpatialSection: View {
+    let mode: NothingProtocol.SpatialMode
+    let modes: [NothingProtocol.SpatialMode]
+    let blocked: Bool
+    let enabled: Bool
+    let select: (NothingProtocol.SpatialMode) -> Void
+
+    var body: some View {
+        Section(t("Spatial audio")) {
+            Picker(t("Spatial audio"), selection: Binding(get: { mode }, set: select)) {
+                ForEach(modes, id: \.self) { Text(title($0)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(!enabled || blocked)
+
+            if blocked {
+                // Гейт донора, вторая его половина: не только бас недоступен
+                // при пространственном звуке, но и наоборот.
+                Text(t("Not available while bass enhance or the advanced equaliser is on."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Поведение устройства: пауза при снятии и режим низкой задержки. Каждый
+/// тумблер появляется только после ответа устройства — нет ответа, нет строки.
+struct DeviceSection: View {
+    let inEar: Bool?
+    let pendingInEar: Bool?
+    let latency: Bool?
+    let pendingLatency: Bool?
+    let codec: NothingProtocol.Codec?
+    let pendingCodec: NothingProtocol.Codec?
+    let codecs: [NothingProtocol.Codec]
+    let personalSound: Bool?
+    let pendingPersonalSound: Bool?
+    let setPersonalSound: (Bool) -> Void
+    let enabled: Bool
+    let setInEar: (Bool) -> Void
+    let setLatency: (Bool) -> Void
+    let setCodec: (NothingProtocol.Codec) -> Void
+
+    var body: some View {
+        Section(t("Device")) {
+            if let inEar {
+                Toggle(t("Pause when removed"), isOn: Binding(
+                    get: { pendingInEar ?? inEar }, set: setInEar))
+                    .disabled(!enabled)
+            }
+            if let latency {
+                Toggle(t("Low latency mode"), isOn: Binding(
+                    get: { pendingLatency ?? latency }, set: setLatency))
+                    .disabled(!enabled)
+            }
+            if let personalSound {
+                Toggle(t("Personal sound"), isOn: Binding(
+                    get: { pendingPersonalSound ?? personalSound }, set: setPersonalSound))
+                    .disabled(!enabled)
+            }
+            if let codec, codecs.count > 1 {
+                LabeledContent(t("Codec")) {
+                    Picker(t("Codec"), selection: Binding(
+                        get: { pendingCodec ?? codec }, set: setCodec)) {
+                        ForEach(codecs, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+                .disabled(!enabled)
+                // Не предупреждение ради вежливости: наушники физически уходят
+                // из эфира на несколько секунд, музыка обрывается.
+                Text(t("Switching the codec reboots the headphones."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Подпись части устройства, к которой адресован поиск.
+func title(_ target: NothingProtocol.RingTarget) -> String {
+    switch target {
+    case .whole: return t("Headphones")
+    case .component(let id):
+        switch id {
+        case 2:  return t("Left")
+        case 3:  return t("Right")
+        default: return t("Headphones")
+        }
+    }
+}
+
+/// Поиск устройства. Кнопка на каждую часть, которую модель умеет звать:
+/// у полноразмерных одна, у затычек левая и правая.
+struct FindSection: View {
+    let targets: [NothingProtocol.RingTarget]
+    let ringing: NothingProtocol.RingTarget?
+    let enabled: Bool
+    let ring: (NothingProtocol.RingTarget, Bool) -> Void
+
+    var body: some View {
+        Section(t("Find device")) {
+            ForEach(targets, id: \.self) { target in
+                LabeledContent(title(target)) {
+                    Button(ringing == target ? t("Stop") : t("Play sound")) {
+                        ring(target, ringing != target)
+                    }
+                    .glassy()
+                }
+                .disabled(!enabled)
+            }
+        }
+    }
+}
+
+/// Подключение к двум устройствам сразу. Выключатель режима плюс список пар:
+/// имена показываем, адреса — никогда, они нужны только чтобы адресовать
+/// команду.
+struct DualSection: View {
+    let enabledMode: Bool
+    let pending: Bool?
+    let devices: [NothingProtocol.DualDevice]
+    let reboots: Bool
+    let enabled: Bool
+    let setEnabled: (Bool) -> Void
+    let connect: (NothingProtocol.DualDevice, Bool) -> Void
+
+    var body: some View {
+        Section(t("Dual connection")) {
+            Toggle(t("Dual connection"), isOn: Binding(
+                get: { pending ?? enabledMode }, set: setEnabled))
+                .disabled(!enabled)
+
+            ForEach(devices, id: \.address) { device in
+                LabeledContent(device.name.isEmpty ? t("Unnamed device") : device.name) {
+                    if device.isSelf {
+                        // Себя не отключают: отключишь — оборвёшь ту самую
+                        // связь, которой отключал.
+                        Text(t("This Mac")).foregroundStyle(.secondary)
+                    } else {
+                        Button(device.isConnected ? t("Disconnect") : t("Connect")) {
+                            connect(device, !device.isConnected)
+                        }
+                        .glassy()
+                    }
+                }
+                .disabled(!enabled)
+            }
+
+            if reboots {
+                Text(t("Switching the mode reboots the headphones."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -1179,6 +1604,7 @@ struct DeviceScreen: View {
     @ObservedObject var battery: BatteryStore
     @ObservedObject var listening: ListeningStore
     @ObservedObject var sound: SoundStore
+    @ObservedObject var deviceSettings: DeviceSettingsStore
     @ObservedObject var gestures: GestureStore
     let reconnect: () -> Void
 
@@ -1186,9 +1612,17 @@ struct DeviceScreen: View {
     /// в хранилище: устройство про этот выбор ничего не знает.
     @State private var band = 0
 
-    /// Язык наблюдается корнем, а не каждой подписью: смена языка обязана
-    /// перерисовать всё дерево разом, иначе половина экрана останется
-    /// на прежнем. С темой то же самое — её подписи тоже переводятся.
+    /// Язык наблюдается корнем, а не каждой подписью. Одного наблюдения мало:
+    /// SwiftUI перерисовывает `body` корня, но дочернее представление, у
+    /// которого не изменилось ни одно поле, пропускает — а язык ни в одно поле
+    /// не входит, он читается функцией `t(...)` внутри. Поэтому корню ставится
+    /// `.id(язык)`: смена языка меняет тождество поддерева, и оно строится
+    /// заново целиком. Без этого на экране остаётся смесь двух языков —
+    /// заголовки вкладок переводятся, а всё внутри нет.
+    ///
+    /// Цена: при переключении языка сбрасывается выбранная вкладка и выбранная
+    /// полоса эквалайзера. Язык переключают редко, и это дешевле, чем тащить
+    /// его параметром в каждое представление.
     @ObservedObject private var strings = Strings.shared
     @ObservedObject private var appearance = Appearance.shared
 
@@ -1217,6 +1651,7 @@ struct DeviceScreen: View {
             // бы враньём про то, что произошло.
             if link.everConnected { device } else { ConnectView(status: link.status, connect: reconnect) }
         }
+        .id(strings.resolved)
     }
 
     /// Настройки самого приложения — вверху и всегда на виду, в том числе
@@ -1253,74 +1688,139 @@ struct DeviceScreen: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
 
-            // Две колонки: длинный расширенный эквалайзер уезжает вправо,
-            // всё остальное остаётся слева. Так окно растёт вширь, а не
-            // вниз, и содержимое помещается целиком без прокрутки.
-            HStack(alignment: .top, spacing: 0) {
-                settings
-                if hasSecondColumn { tuning }
+            // Вкладки, а не одна простыня в две колонки.
+            //
+            // Раскладка руками сломалась четыре раза подряд: секций стало
+            // десять, и подобранная под них высота окна перестала помещаться
+            // на встроенный экран (932 точки против наших 1040). Вкладка
+            // ограничивает содержимое сама, и следующая добавленная
+            // возможность ломает одну вкладку, а не весь экран.
+            TabView {
+                // Порядок вкладок — решение владельца: звук первым, он и есть
+                // то, ради чего в драйвер заходят чаще всего.
+                pair(soundTab, advancedTab).tabItem { Text(t("Sound")) }
+                pair(deviceTab, connectionsTab).tabItem { Text(t("Headphones")) }
+                single(controlsTab).tabItem { Text(t("Controls")) }
             }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
-        // Ширина под две колонки; если правой нечем наполниться, окно можно
-        // сузить руками — вторая колонка тогда не рисуется вовсе.
-        .frame(minWidth: hasSecondColumn ? 1080 : 620, minHeight: 620)
+        .frame(minWidth: 1040)
     }
 
-    /// Правая колонка существует, только если ей есть что показать: у моделей
-    /// без расширенного эквалайзера и без настраиваемых жестов её нет вовсе.
-    private var hasSecondColumn: Bool {
-        (sound.curve.map { !$0.bands.isEmpty } ?? false) || !gestureRows.isEmpty
-    }
-
-    /// Правая колонка: то, что длиннее всего и потому гонит окно вниз.
-    private var tuning: some View {
-        Form {
-            if let curve = sound.curve, !curve.bands.isEmpty {
-                AdvancedEQSection(curve: curve,
-                                  active: sound.advancedOn,
-                                  enabled: link.status == .ready,
-                                  selected: $band,
-                                  setActive: sound.setAdvanced,
-                                  setBand: sound.setBand)
-            }
-            if !gestureRows.isEmpty {
-                GesturesSection(rows: gestureRows,
-                                enabled: link.status == .ready,
-                                select: gestures.set)
-            }
+    /// Две колонки внутри вкладки.
+    private func pair<L: View, R: View>(_ left: L, _ right: R) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Form { left }.formStyle(.grouped)
+            Form { right }.formStyle(.grouped)
         }
-        .formStyle(.grouped)
     }
 
-    private var settings: some View {
-        Form {
-            BatterySection(readings: battery.readings)
-            ListeningSection(mode: listening.mode,
-                             pending: listening.pending,
-                             strengths: listening.strengths,
-                             hasTransparency: listening.hasTransparency,
+    /// Одна колонка во всю ширину — для вкладок, которым вторая не нужна.
+    private func single<V: View>(_ content: V) -> some View {
+        Form { content }.formStyle(.grouped)
+    }
+
+    /// Вкладка «Наушники»: заряд, обработка звука снаружи и поведение устройства.
+    @ViewBuilder
+    private var deviceTab: some View {
+        BatterySection(readings: battery.readings)
+        ListeningSection(mode: listening.mode,
+                         pending: listening.pending,
+                         strengths: listening.strengths,
+                         hasTransparency: listening.hasTransparency,
+                         enabled: link.status == .ready,
+                         selectNoise: listening.set(noise:),
+                         selectStrength: listening.set(strength:))
+        if deviceSettings.inEar != nil || deviceSettings.latency != nil
+            || deviceSettings.codec != nil || deviceSettings.personalSound != nil {
+            DeviceSection(inEar: deviceSettings.inEar,
+                          pendingInEar: deviceSettings.pendingInEar,
+                          latency: deviceSettings.latency,
+                          pendingLatency: deviceSettings.pendingLatency,
+                          codec: deviceSettings.codec,
+                          pendingCodec: deviceSettings.pendingCodec,
+                          codecs: deviceSettings.codecs,
+                          personalSound: deviceSettings.personalSound,
+                          pendingPersonalSound: deviceSettings.pendingPersonalSound,
+                          setPersonalSound: deviceSettings.setPersonalSound,
+                          enabled: link.status == .ready,
+                          setInEar: deviceSettings.setInEar,
+                          setLatency: deviceSettings.setLatency,
+                          setCodec: deviceSettings.setCodec)
+        }
+    }
+
+    /// Правая половина той же вкладки: связи с другими устройствами.
+    @ViewBuilder
+    private var connectionsTab: some View {
+        if let dual = deviceSettings.dualEnabled {
+            DualSection(enabledMode: dual,
+                        pending: deviceSettings.pendingDual,
+                        devices: deviceSettings.dualDevices,
+                        reboots: deviceSettings.dualReboots,
+                        enabled: link.status == .ready,
+                        setEnabled: deviceSettings.setDualEnabled,
+                        connect: deviceSettings.setDualConnect)
+        }
+        if !deviceSettings.ringTargets.isEmpty {
+            FindSection(targets: deviceSettings.ringTargets,
+                        ringing: deviceSettings.ringing,
+                        enabled: link.status == .ready,
+                        ring: deviceSettings.ring)
+        }
+    }
+
+    /// Вкладка «Звук», левая половина: то, что выбирают, а не настраивают.
+    @ViewBuilder
+    private var soundTab: some View {
+        if sound.preset != nil || sound.advancedOn {
+            EqualiserSection(preset: sound.preset,
+                             pending: sound.pendingPreset,
+                             advancedOn: sound.advancedOn,
                              enabled: link.status == .ready,
-                             selectNoise: listening.set(noise:),
-                             selectStrength: listening.set(strength:))
-            // Секции звука появляются только после ответа устройства:
-            // нет ответа — команда недоступна модели или спросить было
-            // не у кого, и пустая секция ничего бы не сказала.
-            if sound.preset != nil || sound.advancedOn {
-                EqualiserSection(preset: sound.preset,
-                                 pending: sound.pendingPreset,
-                                 advancedOn: sound.advancedOn,
-                                 enabled: link.status == .ready,
-                                 select: sound.setPreset)
-            }
-            if let bass = sound.bass {
-                BassSection(bass: bass,
-                            pending: sound.pendingBass,
-                            blocked: sound.spatialActive && sound.mutuallyExclusive,
-                            enabled: link.status == .ready,
-                            set: sound.setBass)
-            }
+                             select: sound.setPreset)
         }
-        .formStyle(.grouped)
+        if let bass = sound.bass {
+            BassSection(bass: bass,
+                        pending: sound.pendingBass,
+                        blocked: sound.spatialActive && sound.mutuallyExclusive,
+                        enabled: link.status == .ready,
+                        set: sound.setBass)
+        }
+        if let spatial = sound.spatial, sound.spatialModes.count > 1 {
+            SpatialSection(mode: sound.pendingSpatial ?? spatial,
+                           modes: sound.spatialModes,
+                           blocked: sound.spatialBlocked,
+                           enabled: link.status == .ready,
+                           select: sound.setSpatial)
+        }
+    }
+
+    /// И правая: восемь полос, которые и гнали окно вниз.
+    @ViewBuilder
+    private var advancedTab: some View {
+        if let curve = sound.curve, !curve.bands.isEmpty {
+            AdvancedEQSection(curve: curve,
+                              active: sound.advancedOn,
+                              blocked: sound.spatialActive && sound.mutuallyExclusive,
+                              enabled: link.status == .ready,
+                              selected: $band,
+                              setActive: sound.setAdvanced,
+                              setBand: sound.setBand)
+        }
+    }
+
+    /// Вкладка «Управление»: раскладка жестов.
+    @ViewBuilder
+    private var controlsTab: some View {
+        if gestureRows.isEmpty {
+            Text(t("No reading yet")).foregroundStyle(.secondary)
+        } else {
+            GesturesSection(rows: gestureRows,
+                            enabled: link.status == .ready,
+                            select: gestures.set)
+        }
     }
 }
 
@@ -1328,23 +1828,34 @@ struct DeviceScreen: View {
 
 /// Единственное место, где известно, что реактивность сделана на
 /// `ObservableObject`, и единственное, что связывает транспорт с хранилищами.
-final class NativeWindow {
+final class NativeWindow: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let link = DeviceLink()
     private let battery = BatteryStore()
     private let listening: ListeningStore
     private let sound: SoundStore
+    private let deviceSettings: DeviceSettingsStore
     private let gestures: GestureStore
 
-    init() {
+    /// Значок в строке меню. Свойством, а не локальной переменной: локальную
+    /// освободят по выходе из `init`, и значок молча исчезнет.
+    private var statusItem: NSStatusItem?
+    /// Заряд в значке приходится подписывать вручную: `NSStatusItem` — AppKit,
+    /// и наблюдать хранилище так, как это делают представления, он не умеет.
+    /// Единственное место в проекте, где реактивность видна снаружи SwiftUI.
+    private var cancellables = Set<AnyCancellable>()
+
+    override init() {
         listening = ListeningStore(link: link)
         sound = SoundStore(link: link)
+        deviceSettings = DeviceSettingsStore(link: link)
         gestures = GestureStore(link: link)
 
-        link.onFrame = { [battery, listening, sound, gestures] frame in
+        link.onFrame = { [battery, listening, sound, deviceSettings, gestures] frame in
             battery.apply(frame)
             listening.apply(frame)
             sound.apply(frame)
+            deviceSettings.apply(frame)
             gestures.apply(frame)
         }
         // Первый залп — только команды, доступные всем моделям без оговорок.
@@ -1358,8 +1869,11 @@ final class NativeWindow {
         // Окно создаём до содержимого — та же грабля, что с WKWebView.
         // Высота — под полный состав секций B170; на экранах пониже Form
         // прокручивается сам.
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 940),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable,
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 880),
+                          // Без `.resizable` намеренно: размер окна фиксирован.
+                          // Решение владельца — границы не должны двигаться
+                          // вовсе, а не «не ужиматься ниже минимума».
+                          styleMask: [.titled, .closable, .miniaturizable,
                                       .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "Nothing"
@@ -1368,12 +1882,29 @@ final class NativeWindow {
         window.center()
         window.contentView = NSHostingView(
             rootView: DeviceScreen(link: link, battery: battery, listening: listening,
-                                   sound: sound, gestures: gestures,
+                                   sound: sound, deviceSettings: deviceSettings,
+                                   gestures: gestures,
                                    reconnect: { [weak link] in link?.connect() }))
+
+        // Ограничение размера ставится ПОСЛЕ содержимого, а не до: заданное
+        // раньше, оно затирается при установке `contentView`, и окно снова
+        // ужимается мышью до прокрутки. Проверено ровно этим способом.
+        // Восстановление рамки выключено: иначе система при следующем запуске
+        // возвращает прежний размер окна — в том числе тот, до которого его
+        // однажды ужали. Ловилось так: окно открывалось 1120×666 при
+        // заказанных 1120×820.
+        window.isRestorable = false
+
+        // Все хранимые свойства заполнены — только теперь можно к базовому
+        // классу и к self. Порядок здесь диктует компилятор, а не вкус.
+        super.init()
+        window.delegate = self
+        installStatusItem()
 
         // Подписка с захватом self — только когда init доинициализировал
         // все поля: Swift не даст захватить self раньше, и правильно сделает.
         link.onFirmware = { [weak self] _ in self?.applyCatalog() }
+        link.onLost = { [deviceSettings] in deviceSettings.forgetRinging() }
     }
 
     /// Второй залп: всё, что имеет смысл только при известной модели и
@@ -1387,8 +1918,30 @@ final class NativeWindow {
         gestures.slots = NothingCatalog.gestures(model: model, firmware: firmware)
         listening.strengths = NothingCatalog.noiseStrengths(model: model, firmware: firmware)
         listening.hasTransparency = NothingCatalog.hasTransparency(model: model, firmware: firmware)
+        sound.spatialModes = NothingCatalog.spatialModes(model: model, firmware: firmware)
+        deviceSettings.codecs = NothingCatalog.codecs(model: model, firmware: firmware)
+        deviceSettings.dualReboots =
+            NothingCatalog.flags(model: model, firmware: firmware)[.dualConnectionReboot] == 1
+        deviceSettings.ringTargets = NothingCatalog.ringTargets(model: model, firmware: firmware)
+        deviceSettings.personalSoundCommands =
+            NothingCatalog.personalSound(model: model, firmware: firmware)
+        // Список пар спрашивается страницами, поэтому отдельно от общего залпа.
+        if let op = NothingCatalog.byCode[NothingProtocol.Command.dualList.rawValue],
+           NothingCatalog.supports(op, model: model, firmware: firmware) {
+            deviceSettings.requestDualList()
+        }
+        // Персональный звук спрашивается своей командой: какой именно —
+        // решает каталог, а не экран.
+        if let read = deviceSettings.personalSoundCommands?.read,
+           let op = NothingCatalog.byCode[read],
+           NothingCatalog.supports(op, model: model, firmware: firmware),
+           let command = NothingProtocol.Command(rawValue: read) {
+            link.request(command)
+        }
         for command: NothingProtocol.Command in [.equaliser, .advancedEQEnabled,
-                                                 .bassEnhance, .spatialAudio] {
+                                                 .bassEnhance, .spatialAudio,
+                                                 .inEarDetection, .latencyMode,
+                                                 .highQualityAudio, .dualConnectEnabled] {
             guard let op = NothingCatalog.byCode[command.rawValue],
                   NothingCatalog.supports(op, model: model, firmware: firmware) else { continue }
             link.request(command)
@@ -1400,9 +1953,174 @@ final class NativeWindow {
         }
     }
 
+    // MARK: - Строка меню
+
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = NSImage(systemSymbolName: "headphones",
+                                     accessibilityDescription: t("Nothing device"))
+        item.button?.imagePosition = .imageLeading
+        item.button?.target = self
+        item.button?.action = #selector(statusClicked)
+        // Без этого AppKit шлёт действие только на левую кнопку, и правого
+        // клика мы не увидим вовсе.
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem = item
+
+        // Заряд у значка — последний прочитанный. Периодического опроса нет
+        // намеренно: push-событий у B170 нет (проверено 02.09), а частый
+        // опрос грел бы канал ради числа, которое меняется раз в час.
+        battery.$readings
+            .receive(on: RunLoop.main)
+            .sink { [weak self] readings in
+                self?.statusItem?.button?.title =
+                    readings.first.map { " \($0.percent)%" } ?? ""
+            }
+            .store(in: &cancellables)
+    }
+
+    @objc private func statusClicked() {
+        // Оба клика показывают меню, и это не упрощение, а единственное, что
+        // работает везде. Popover из строки меню не показывается над чужим
+        // полноэкранным окном: он живёт в пространстве приложения, а система
+        // туда не переключается. Системное меню рисуется поверх всего и не
+        // требует, чтобы приложение было активным, — на нём и остановились.
+        if NSApp.currentEvent?.type == .rightMouseUp { showMenu() } else { showControls() }
+    }
+
+    /// Показать меню одним кликом. Назначенное меню перехватывает и левый
+    /// клик, поэтому оно живёт ровно один клик: назначили, показали, сняли.
+    private func present(_ menu: NSMenu) {
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
+    }
+
+    /// Левый клик: состояние и то, что меняют чаще всего.
+    private func showControls() {
+        let menu = NSMenu()
+
+        let name = link.deviceName ?? t("Nothing device")
+        let charge = battery.readings.first.map { " · \($0.percent)%" } ?? ""
+        let header = NSMenuItem(title: name + charge, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        let shown = listening.pending ?? listening.mode
+        let modes: [NothingProtocol.NoiseMode] =
+            listening.hasTransparency ? [.cancelling, .transparency, .off] : [.cancelling, .off]
+
+        if link.status == .ready {
+            menu.addItem(.separator())
+            for mode in modes {
+                let item = NSMenuItem(title: t(title(mode)), action: #selector(pickNoise(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = mode
+                item.state = shown?.noise == mode ? .on : .off
+                menu.addItem(item)
+            }
+
+            // Уровень — подменю, и только там, где он вообще есть: у части
+            // моделей ступеней нет, и пустое подменю солгало бы про модель.
+            //
+            // Показывается ВСЕГДА, а не только при включённом шумоподавлении.
+            // Иначе выбор уровня стоит двух открытий меню: первое включает
+            // шумоподавление и закрывается, и только во втором появляется
+            // подменю. Выбор уровня сам включает шумоподавление, так что
+            // одного клика достаточно и по смыслу.
+            if !listening.strengths.isEmpty {
+                let levels = NSMenu()
+                for strength in listening.strengths {
+                    let item = NSMenuItem(title: t(title(strength)),
+                                          action: #selector(pickStrength(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = strength
+                    item.state = shown?.strength == strength ? .on : .off
+                    levels.addItem(item)
+                }
+                let holder = NSMenuItem(title: t("Level"), action: nil, keyEquivalent: "")
+                holder.submenu = levels
+                menu.addItem(holder)
+            }
+        } else {
+            let waiting = NSMenuItem(title: t("Looking for headphones…"), action: nil,
+                                     keyEquivalent: "")
+            waiting.isEnabled = false
+            menu.addItem(.separator())
+            menu.addItem(waiting)
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: t("Open window"), action: #selector(openWindow), keyEquivalent: "")
+            .target = self
+        present(menu)
+    }
+
+    @objc private func pickNoise(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? NothingProtocol.NoiseMode else { return }
+        listening.set(noise: mode)
+    }
+
+    @objc private func pickStrength(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? NothingProtocol.NoiseStrength else { return }
+        listening.set(strength: value)
+    }
+
+    private func showMenu() {
+        let menu = NSMenu()
+        menu.addItem(withTitle: t("Open window"), action: #selector(openWindow), keyEquivalent: "")
+            .target = self
+        if let target = deviceSettings.ringTargets.first {
+            menu.addItem(.separator())
+            let ringing = deviceSettings.ringing != nil
+            menu.addItem(withTitle: ringing ? t("Stop") : t("Find headphones"),
+                         action: #selector(toggleRing), keyEquivalent: "")
+                .target = self
+            _ = target
+        }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: t("Quit"), action: #selector(quit), keyEquivalent: "q")
+            .target = self
+        present(menu)
+    }
+
+    @objc private func openWindow() { show() }
+
+    @objc private func toggleRing() {
+        guard let target = deviceSettings.ringTargets.first else { return }
+        deviceSettings.ring(target, deviceSettings.ringing == nil)
+    }
+
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    /// Крестик прячет окно, а не закрывает его. Драйвер живёт дольше своей
+    /// витрины: наушники подключены и тогда, когда смотреть на них не нужно.
+    /// Возвращать окно нечем, кроме значка в строке меню и Dock, — поэтому
+    /// оба обязаны существовать к этому моменту.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        window.orderOut(nil)
+        return false
+    }
+
     func show() {
+        // Размер задаём при каждом показе: система может ужать окно, если в
+        // прошлый раз оно не помещалось на другой экран.
+        window.setContentSize(NSSize(width: 1120, height: 880))
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        link.connect()
+        // Второй и последующие показы канал не трогают: он уже открыт, и
+        // переподключение ради показа окна оборвало бы живую связь.
+        if link.status == .idle { link.connect() }
+    }
+
+    /// Выход любым способом отпускает канал. Не косметика: устройство отдаёт
+    /// его одной программе за раз, и не отпустив, мы оставим наушники
+    /// недоступными для всех остальных до перезагрузки Bluetooth.
+    func shutdown() {
+        // Оставить звенящие наушники после выхода — самое обидное, что можно
+        // сделать: остановить их будет уже нечем.
+        if let ringing = deviceSettings.ringing { deviceSettings.ring(ringing, false) }
+        link.close()
     }
 }

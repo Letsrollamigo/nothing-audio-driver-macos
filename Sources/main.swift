@@ -94,6 +94,12 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
     var onOpened: (_ ok: Bool, _ reason: String) -> Void = { _, _ in }
     var onReceive: (_ frame: [UInt8]) -> Void = { _ in }
     var onClosed: () -> Void = {}
+    /// Канал оборвался и поднялся сам. Отдельный колбэк, а не `onOpened`:
+    /// сайту про восстановление говорить нельзя — он уйдёт на экран выбора
+    /// устройства, — а нативному экрану нужно, иначе после перезагрузки
+    /// наушников (её вызывает смена кодека) он останется с прежними
+    /// значениями и будет их показывать как настоящие.
+    var onRestored: () -> Void = {}
 
     /// Имя и адрес устройства, к которому открыт канал. Имя показывается как
     /// есть, а по адресу лежит кэш опознания — по нему узнаётся модель и цвет.
@@ -123,7 +129,7 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         if opening && retry { trace("open: подключение уже идёт, повторный запрос игнорирую"); return }
         guard let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
             trace("open: pairedDevices() = nil (нет доступа к Bluetooth)")
-            if reconnecting { notifyClosed() } else { opened(false, "нет доступа к Bluetooth") }
+            if reconnecting { notifyClosed() } else { opened(false, "no access to Bluetooth") }
             return
         }
         lastUUID = uuidString
@@ -157,7 +163,7 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
                 if uuidString == FASTPAIR_UUID { scheduleFastpairFallback(address: device.addressString ?? "?") }
                 return
             }
-            opened(false, "канал \(chID): ошибка \(rc)"); return
+            opened(false, "channel \(chID): error \(rc)"); return
         }
         // Кэш SDP пуст, пока устройство не опрошено — спрашиваем и пробуем ещё раз.
         if retry {
@@ -170,7 +176,7 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
         trace("open: сервис так и не найден")
         if reconnecting { notifyClosed() }
-        else { opened(false, "устройство с нужным сервисом не найдено — включено ли оно и сопряжено?") }
+        else { opened(false, "the device with this service was not found — is it on and paired?") }
     }
 
     private func scheduleFastpairFallback(address: String) {
@@ -183,7 +189,7 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             self.opening = false
             guard let hex = UserDefaults.standard.string(forKey: "fastpair-\(address)") else {
                 trace("FastPair: канал не открылся, сохранённого опознания нет")
-                self.opened(false, "канал опознания недоступен — переподключите наушники и попробуйте снова")
+                self.opened(false, "the identification channel is unavailable — reconnect the headphones and try again")
                 return
             }
             trace("FastPair: канал молчит, подставляю сохранённое опознание \(hex)")
@@ -211,6 +217,15 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         DispatchQueue.main.async { self.onClosed() }
     }
 
+    // Причины отказа, которые уходят в `onOpened`, написаны по-английски не из
+    // вкуса: они попадают на экран через `t(...)`, а ключ таблицы строк — это
+    // английская строка. Русская причина показалась бы русской и при выбранном
+    // английском — ровно тот артефакт, ради которого правило и заведено.
+    //
+    // Две причины с подстановкой (`channel …: error …`, `status …`) ключами
+    // быть не могут по построению и остаются английскими всегда. Это
+    // диагностика для отчёта об ошибке, а не текст для чтения.
+
     /// Шим шлёт гекс — разбираем на границе и дальше живём байтами.
     func write(hex: String) { write(hexBytes(hex)) }
 
@@ -224,7 +239,16 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
         var buf = bytes
         let rc = ch.writeSync(&buf, length: UInt16(buf.count))
-        if rc == kIOReturnSuccess { trace("→ \(hexString(bytes))") }
+        if rc == kIOReturnSuccess {
+            // Запись `0xF01B` несёт MAC-адрес чужого устройства пользователя —
+            // ровно то же, что и ответ `0x4028`, только в другую сторону.
+            // Вырезать надо обе: закрыв одну половину, лог не очистишь.
+            if bytes.count > 5, bytes[3] == 0x1B, bytes[4] == 0xF0 {
+                trace("→ 0xF01B <вырезано: адрес устройства>, \(bytes.count) б")
+            } else {
+                trace("→ \(hexString(bytes))")
+            }
+        }
         if rc != kIOReturnSuccess {
             trace("write: ошибка \(rc), кадр в очередь, переподключаюсь")
             enqueue(bytes)
@@ -286,14 +310,18 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         trace("openComplete: статус \(status), MTU \(ch?.getMTU() ?? 0)")
         if status == kIOReturnSuccess {
             isOpen = true
-            if reconnecting { trace("канал восстановлен"); reconnecting = false }
+            if reconnecting {
+                trace("канал восстановлен")
+                reconnecting = false
+                DispatchQueue.main.async { [onRestored] in onRestored() }
+            }
             else { opened(true) }
             flushOutbox()
         }
         else {
             channel = nil; isOpen = false
             if reconnecting { trace("восстановить канал не удалось"); notifyClosed() }
-            else { opened(false, "статус \(status)") }
+            else { opened(false, "status \(status)") }
         }
     }
     func rfcommChannelData(_ ch: IOBluetoothRFCOMMChannel!, data: UnsafeMutableRawPointer!, length: Int) {
@@ -322,7 +350,15 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             guard inbox.count >= total else { break }
             let frame = Array(inbox.prefix(total))
             inbox.removeFirst(total)
-            trace("← \(hexString(frame))")
+            // Ответ со списком пар несёт MAC-адреса и имена чужих устройств
+            // пользователя. В лог он не идёт: лог читают и пересылают, а
+            // персональные данные там появляться не должны. Заголовок
+            // оставляем — по нему видно, что ответ пришёл и какой длины.
+            if frame.count > 5, frame[3] == 0x28, frame[4] == 0x40 {
+                trace("← 0x4028 <вырезано: адреса и имена устройств>, \(frame.count) б")
+            } else {
+                trace("← \(hexString(frame))")
+            }
             received(frame)
         }
     }
@@ -472,7 +508,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
+    /// Только для веб-пути. У нативного экрана крестик прячет окно, а вернуть
+    /// его можно значком в строке меню и в Dock; у сайта такого значка нет,
+    /// и приложение без окна стало бы недостижимым.
+    func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool {
+        CommandLine.arguments.contains("--web")
+    }
+
+    /// Канал отпускается при выходе любым способом — Cmd+Q, меню, закрытие
+    /// сеанса. Устройство отдаёт его одной программе за раз.
+    func applicationWillTerminate(_ note: Notification) {
+        native?.shutdown()
+        bridge.close()
+    }
 }
 
 let app = NSApplication.shared

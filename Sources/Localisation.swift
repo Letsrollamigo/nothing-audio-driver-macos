@@ -84,6 +84,11 @@ extension Strings {
         "Not connected": "Нет подключения",
         "Connected": "Подключено",
         "connection lost": "связь потеряна",
+        "no access to Bluetooth": "Нет доступа к Bluetooth",
+        "the device with this service was not found — is it on and paired?":
+            "Устройство с нужным сервисом не найдено — включено ли оно и сопряжено?",
+        "the identification channel is unavailable — reconnect the headphones and try again":
+            "Канал опознания недоступен — переподключите наушники и попробуйте снова",
         "the connection is busy or the device is not responding":
             "соединение занято или устройство не отвечает",
         "Reconnect": "Переподключить",
@@ -193,6 +198,36 @@ extension Strings {
         "System": "Системная",
         "Light": "Светлая",
         "Dark": "Тёмная",
+
+        // Пространственный звук и поведение устройства
+        "Head tracking": "Следит за головой",
+        "Fixed": "Фиксированный",
+        "Concert": "Концерт",
+        "Theatre": "Театр",
+        "Game": "Игра",
+        "Not available while bass enhance or the advanced equaliser is on.":
+            "Недоступно, пока включено усиление баса или расширенный эквалайзер.",
+        "Device": "Устройство",
+        "Pause when removed": "Пауза при снятии",
+        "Low latency mode": "Режим низкой задержки",
+        "Codec": "Кодек",
+        "Personal sound": "Персональный звук",
+        "Sound": "Звук",
+        "Dual connection": "Подключение к двум устройствам",
+        "Switching the mode reboots the headphones.":
+            "Переключение режима перезагружает наушники.",
+        "This Mac": "Этот компьютер",
+        "Unnamed device": "Устройство без имени",
+        "Disconnect": "Отключить",
+        "Find device": "Поиск устройства",
+        "Find headphones": "Найти наушники",
+        "Open window": "Открыть окно",
+        "Looking for headphones…": "Ищу наушники…",
+        "Quit": "Выйти",
+        "Play sound": "Позвонить",
+        "Stop": "Остановить",
+        "Switching the codec reboots the headphones.":
+            "Смена кодека перезагружает наушники.",
 
         // Единицы
         "Hz": "Гц",
