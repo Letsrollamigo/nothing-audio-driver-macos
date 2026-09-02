@@ -1,5 +1,11 @@
 # Architecture
 
+> **Scope.** This document describes the `--web` path only: the shell around
+> the borrowed web interface, the Web Serial shim and the Bluetooth transport
+> under them. It was written before the native layer existed and says nothing
+> about the protocol the application implements itself. Since 1.0.0 a normal
+> launch does not use any of it.
+
 Three pieces, none of which knows anything about headphones. All device
 knowledge stays in the upstream interface; this repository only carries bytes
 between it and the Bluetooth stack.

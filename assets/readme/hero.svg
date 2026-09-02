@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img"
-     aria-label="Unofficial driver for Nothing audio devices — a native macOS shell that gives the ear (web) driver a real Bluetooth transport.">
+     aria-label="Unofficial driver for Nothing audio devices — a native macOS driver for Nothing and CMF headphones, with its own implementation of the device protocol.">
   <rect width="1200" height="300" rx="18" fill="#211f1e"/>
   <g transform="translate(105 140)" fill="none" stroke="#efefec" stroke-width="11" stroke-linecap="round">
     <path d="M-52 8 A 52 52 0 0 1 52 8"/>
@@ -11,7 +11,7 @@
   <circle cx="105" cy="206" r="7" fill="#d94f28"/>
   <text x="210" y="112" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="38" fill="#efefec" textLength="400" lengthAdjust="spacingAndGlyphs">Unofficial driver</text>
   <text x="210" y="158" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="38" fill="#efefec" textLength="588" lengthAdjust="spacingAndGlyphs">for Nothing audio devices</text>
-  <text x="210" y="204" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="22" fill="#9b9894" textLength="740" lengthAdjust="spacingAndGlyphs">A native macOS shell that gives the ear (web) driver a real Bluetooth</text>
-  <text x="210" y="234" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="22" fill="#9b9894" textLength="800" lengthAdjust="spacingAndGlyphs">transport — Web Serial does not exist in WebKit, so the app brings its own.</text>
-  <text x="210" y="270" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#6f6c68" textLength="650" lengthAdjust="spacingAndGlyphs">Swift · WKWebView · IOBluetooth RFCOMM · no upstream code bundled</text>
+  <text x="210" y="204" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="22" fill="#9b9894" textLength="700" lengthAdjust="spacingAndGlyphs">A native macOS driver for Nothing and CMF headphones, with its own</text>
+  <text x="210" y="234" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="22" fill="#9b9894" textLength="760" lengthAdjust="spacingAndGlyphs">implementation of the device protocol. No browser, no web interface.</text>
+  <text x="210" y="270" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#6f6c68" textLength="640" lengthAdjust="spacingAndGlyphs">Swift · SwiftUI · IOBluetooth RFCOMM · no upstream code bundled</text>
 </svg>

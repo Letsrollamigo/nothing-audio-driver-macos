@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.0] — 2026-09-02
+
+The application stops wrapping somebody else's web interface and speaks the
+device protocol itself. A normal launch fetches nothing from anywhere.
+
+### Added
+
+- `NothingProtocol.swift` — the codec: frame layout, CRC16-Modbus, roles, stream slicing and field parsing. It knows bytes and nothing about models.
+- `NothingCatalog.swift` — the dictionary: 84 commands, 23 models, 63 identification records, per-model capabilities, firmware bands and gesture layouts, all as data. Generated from the upstream configuration by a script that stays out of this repository; 42 commands are confirmed against hardware and the rest are marked as derived.
+- `NativeScreen.swift` — the screen: three tabs covering noise cancellation and its strength, equaliser presets and bands, bass, spatial audio, gestures, codec, in-ear detection, low latency, personal sound, dual connection, find-my-device, battery and firmware.
+- A menu bar item with battery and listening mode: a left click changes noise cancellation and its strength, a right click opens the window, find-my-device and quit.
+- `Localisation.swift` — Russian and English in one table, switched at runtime. No `.lproj` catalogues: resource directories would break the CI check for foreign files in the bundle.
+- Device artwork drawn from system symbols by form factor, replacing the device renders that were read out of the downloaded copy of the site.
+
+### Changed
+
+- A normal launch opens the native screen. The borrowed web interface moved behind the `--web` flag, and only that mode fetches anything from the authors' deployment.
+- Closing the window hides it instead of quitting; the driver keeps the channel and stays reachable from the menu bar. Quitting by any route releases the channel.
+- The window is no longer resizable, and its saved frame is not restored: the layout is built for one size.
+- `./build.sh --test` grew to 210 checks and now covers the protocol as well as the path rules.
+
+[1.0.0]: https://github.com/Letsrollamigo/nothing-audio-driver-macos/releases/tag/v1.0.0
+
 ## [0.1.0] — 2026-08-31
 
 First release.
