@@ -106,6 +106,48 @@ struct ProtocolTest {
         check(NothingProtocol.EqualiserPreset(rawValue: 6) == nil,
               "«Advanced» пресетом не считается")
 
+        // --- переключатель продвинутого эквалайзера: два байта, второй ноль.
+        // Выключение в точности как advoff, проверенный на железе; донор шлёт
+        // этот кадр перед каждой записью пресета, не глядя на состояние.
+        let advOff = try! NothingProtocol.decode(
+            NothingProtocol.encodeSetAdvancedEQEnabled(false, operationID: 5))
+        check(advOff.command == 0xF04F && advOff.payload == [0x00, 0x00],
+              "выключение продвинутого эквалайзера — 0xF04F с [00, 00]")
+        let advOn = try! NothingProtocol.decode(
+            NothingProtocol.encodeSetAdvancedEQEnabled(true, operationID: 5))
+        check(advOn.payload == [0x01, 0x00],
+              "включение отличается только первым байтом")
+
+        // --- режим раскладывается на вид обработки и силу и собирается обратно.
+        // На проводе это одно значение, на экране два контрола — как у донора.
+        check(NothingProtocol.ListeningMode.ancMid.noise == .cancelling
+                && NothingProtocol.ListeningMode.ancMid.strength == .mid,
+              "0x02 — это шумоподавление средней силы")
+        check(NothingProtocol.ListeningMode.transparency.strength == nil
+                && NothingProtocol.ListeningMode.off.strength == nil,
+              "у прозрачности и выключенного силы не бывает")
+        for value in NothingProtocol.ListeningMode.allCases {
+            let rebuilt = NothingProtocol.ListeningMode(
+                noise: value.noise, strength: value.strength ?? .high)
+            check(rebuilt == value, "\(value) переживает разбор и сборку обратно")
+        }
+        // Маска ancLevel: биты объявлены константами у донора и стоят гейтами.
+        // У B170 маска 63 — все четыре ступени и прозрачность.
+        let b170Strengths = NothingCatalog.noiseStrengths(model: "B170", firmware: "1.0.1.81")
+        check(b170Strengths == [.low, .mid, .high, .adaptive],
+              "у B170 все четыре ступени силы, по нарастанию",
+              "\(b170Strengths)")
+        check(NothingCatalog.hasTransparency(model: "B170", firmware: "1.0.1.81"),
+              "и прозрачность у неё есть")
+        // Ключа ancLevel нет вовсе — селектора силы нет, но это не значит,
+        // что нет шумоподавления: режим такие модели читают.
+        let noKey = NothingCatalog.models.filter {
+            $0.bands.allSatisfy { $0.flags[.ancLevel] == nil } }.map(\.id)
+        check(noKey == ["B174", "B189"], "ключа ancLevel нет ровно у двух моделей",
+              noKey.joined(separator: " "))
+        check(NothingCatalog.noiseStrengths(model: "B174", firmware: "1.0.0.1").isEmpty,
+              "и селектор силы им не показывается")
+
         // --- время: big-endian, в отличие от всего остального в протоколе
         let timeFrame = try! NothingProtocol.decode(
             NothingProtocol.encodeSetTime(Date(timeIntervalSince1970: 0x6A955E13), operationID: 10))
@@ -521,6 +563,26 @@ struct ProtocolTest {
               "код круга 0x16 приводится к шумоподавлению")
         check(NothingCatalog.GestureAction(rawValue: 0x16) == nil,
               "а сырым значением 0x16 в перечисление не входит — иначе круг стал бы действием")
+
+        // Физический орган. Назван только там, где органов на устройстве
+        // несколько и где второй источник его называет: у B170 колесо и
+        // кнопка, у B175 ещё ползунок. У моделей без страницы органа нет
+        // даже при совпадающих номерах кнопок — вывод по похожести это то
+        // самое наследование, из-за которого не читается supportId.
+        check(b170.first { $0.button == 1 }?.control == .roller,
+              "кнопка 1 у B170 — колесо")
+        check(b170.filter { $0.button == 10 }.allSatisfy { $0.control == .button },
+              "кнопка 10 у B170 — кнопка, оба жеста")
+        check(NothingCatalog.gestures(model: "B175", firmware: "1.0.0.1")
+                  .first { $0.button == 5 }?.control == .slider,
+              "кнопка 5 у B175 — ползунок")
+        let named = Set(NothingCatalog.models.filter {
+            $0.bands.contains { $0.gestures.contains { $0.control != nil } }
+        }.map(\.id))
+        check(named == ["B170", "B175", "B186"],
+              "орган назван ровно у трёх моделей", named.sorted().joined(separator: " "))
+        check(all.allSatisfy { $0.control == nil || $0.device == 6 },
+              "и только на устройстве 6 — прочим номера устройства достаточно")
 
         // Полосы прошивок. B157 — единственная модель, у которой раскладка
         // от прошивки зависит; если станет две, упадёт эта проверка.

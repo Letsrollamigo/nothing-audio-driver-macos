@@ -133,6 +133,7 @@ public enum NothingProtocol {
         case advancedEQValue      = 0xC04D
 
         case setBassEnhance       = 0xF051
+        case setAdvancedEQEnabled = 0xF04F
         case setUTCTime           = 0xF00A
         case ringDevice           = 0xF002
         case setGestures          = 0xF003
@@ -191,6 +192,45 @@ public enum NothingProtocol {
         case ancAdaptive = 0x04
         case off         = 0x05
         case transparency = 0x07
+
+        /// Вид обработки без силы. На проводе они слиты в одно значение,
+        /// а на экране это два разных контрола — так же, как у донора,
+        /// где сила живёт отдельным селектором и гейтится маской `ancLevel`.
+        public var noise: NoiseMode {
+            switch self {
+            case .transparency: return .transparency
+            case .off:          return .off
+            default:            return .cancelling
+            }
+        }
+
+        /// Сила есть только у шумоподавления: у прозрачности и выключенного
+        /// её не бывает, и `nil` здесь — факт протокола, а не «не нашли».
+        public var strength: NoiseStrength? { NoiseStrength(rawValue: rawValue) }
+
+        /// Собрать обратно. Сила нужна только шумоподавлению, остальным она
+        /// безразлична — поэтому у неё есть умолчание.
+        public init(noise: NoiseMode, strength: NoiseStrength = .high) {
+            switch noise {
+            case .transparency: self = .transparency
+            case .off:          self = .off
+            case .cancelling:   self = ListeningMode(rawValue: strength.rawValue) ?? .ancHigh
+            }
+        }
+    }
+
+    /// Вид обработки внешнего звука.
+    public enum NoiseMode: Equatable, CaseIterable {
+        case cancelling, transparency, off
+    }
+
+    /// Сила шумоподавления. Номера те же, что у режима: сила и есть режим,
+    /// отдельного поля силы в протоколе нет.
+    public enum NoiseStrength: UInt8, Equatable, CaseIterable {
+        case high = 0x01
+        case mid  = 0x02
+        case low  = 0x03
+        case adaptive = 0x04
     }
 
     /// Ответ `0x401E` и push `0xE003`: режим лежит в `payload[1]`, не в `payload[0]`.
@@ -491,6 +531,17 @@ public enum NothingProtocol {
             payload += float32(band.quality)
         }
         return payload
+    }
+
+    /// Запись `0xF04F`: `[признак, 0x00]`. Донор шлёт выключение перед каждой
+    /// записью пресета, не глядя на текущее состояние, — и это единственный
+    /// известный способ выйти из продвинутого эквалайзера, который запись
+    /// `0xF050` включает сама. Выключение проверено на железе; включение
+    /// этим же кадром донор делает кнопкой «Advanced», на проводе не сверялось.
+    public static func encodeSetAdvancedEQEnabled(_ enabled: Bool, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setAdvancedEQEnabled.rawValue,
+                     operationID: operationID,
+                     payload: [enabled ? 1 : 0, 0x00]))
     }
 
     /// Запись `0xF050`. Раскладка та же, что у чтения `0x404D`, но профиль

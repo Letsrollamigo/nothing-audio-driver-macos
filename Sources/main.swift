@@ -224,6 +224,7 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
         var buf = bytes
         let rc = ch.writeSync(&buf, length: UInt16(buf.count))
+        if rc == kIOReturnSuccess { trace("→ \(hexString(bytes))") }
         if rc != kIOReturnSuccess {
             trace("write: ошибка \(rc), кадр в очередь, переподключаюсь")
             enqueue(bytes)
@@ -266,8 +267,16 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         isOpen = false
         inbox.removeAll()
         outbox.removeAll()
-        channel?.close()
+        // Обнуляем ССЫЛКУ ДО закрытия, а не после. Иначе `rfcommChannelClosed`
+        // успевает прийти, пока поле ещё указывает на этот канал, проходит
+        // проверку «свой ли» и трактуется как ОБРЫВ: мост уходит в режим
+        // восстановления, и следующее удачное открытие он уже никому не
+        // сообщает — `openComplete` там молча уходит в ветку reconnecting.
+        // Наше собственное закрытие обрывом не является, и после обнуления
+        // тот же колбэк честно опознаётся как посторонний.
+        let closing = channel
         channel = nil
+        closing?.close()
     }
 
     func rfcommChannelOpenComplete(_ ch: IOBluetoothRFCOMMChannel!, status: IOReturn) {
@@ -335,10 +344,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var native: NativeWindow?
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        // Нативный экран растёт рядом с оболочкой: обычный запуск идёт как
-        // раньше, флаг открывает пробный экран вместо чужого сайта.
-        if CommandLine.arguments.contains("--native") {
+        // Нативный экран стал основным: обычный запуск идёт в него, а чужой
+        // сайт остаётся под флагом `--web` — он всё ещё умеет то, до чего
+        // нативный слой пока не дорос (пространственный звук, две пары,
+        // детекция в ухе, кодек, персональный звук).
+        if !CommandLine.arguments.contains("--web") {
             trace("=== старт: нативный экран ===")
+            // Сохранённая тема применяется ДО разбора отладочных флагов,
+            // чтобы --dark и --light оставались сильнее настройки.
+            Appearance.shared.apply()
             // Тему система переключает глобально, а смотреть надо обе.
             // Отладочный флаг, как --selftest; в обычном запуске приложение
             // следует системе и ничего не навязывает.
@@ -450,7 +464,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         trace("js → \(op)")
         switch op {
         case "open":  bridge.open(uuidString: (body["uuid"] as? String) ?? SPP_UUID)
-        case "write": if let hex = body["hex"] as? String { trace("→ \(hex)"); bridge.write(hex: hex) }
+        // Кадр не логируем здесь: `SerialBridge.write` пишет `→` сам, и только
+        // когда кадр действительно ушёл. Две строки на одну запись сбивают с толку.
+        case "write": if let hex = body["hex"] as? String { bridge.write(hex: hex) }
         case "close": bridge.close()
         default: break
         }
