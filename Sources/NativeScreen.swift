@@ -68,24 +68,6 @@ final class Appearance: ObservableObject {
     func apply() { NSApp.appearance = theme.appearance }
 }
 
-// MARK: - Картинки устройств
-
-/// Рендеры наушников берутся из копии сайта, которую приложение и так скачало
-/// на машину пользователя, — в репозиторий и бандл они не входят и входить
-/// не должны (`Notes/DECISIONS.md`). Отдельный слой существует ради того,
-/// чтобы замена источника на свою графику не тронула ни одного экрана.
-enum DeviceArtwork {
-    enum Part: String { case left, right, `case`, duo }
-
-    /// Копия может отсутствовать, файла может не быть, формат может не
-    /// прочитаться — во всех трёх случаях экран обходится значком.
-    static func image(_ identity: NothingCatalog.Identity, _ part: Part = .duo) -> NSImage? {
-        guard let site = SiteStore.activeSite() else { return nil }
-        let file = site.appendingPathComponent("assets/\(identity.artwork)_\(part.rawValue).webp")
-        return NSImage(contentsOf: file)
-    }
-}
-
 // MARK: - Транспорт для нативных экранов
 
 /// Обёртка над `SerialBridge`: собирает кадры из байтов, раздаёт разобранными
@@ -108,7 +90,6 @@ final class DeviceLink: ObservableObject {
     /// только сразу после подключения, — поэтому берём то, что мост уже
     /// сохранил в прошлый раз. Нет кэша — нет картинки, и это не беда.
     @Published private(set) var identity: NothingCatalog.Identity?
-    @Published private(set) var artwork: NSImage?
     /// Версия прошивки. Нужна не столько экрану, сколько каталогу: полосы
     /// возможностей и раскладок жестов выбираются по ней.
     @Published private(set) var firmware: String?
@@ -244,7 +225,6 @@ final class DeviceLink: ObservableObject {
               let hex = UserDefaults.standard.string(forKey: "fastpair-\(address)") else { return }
         guard let found = NothingCatalog.identity(fastpair: hexBytes(hex)) else { return }
         identity = found
-        artwork = DeviceArtwork.image(found)
     }
 
     /// Устройство возвращает идентификатор операции в ответе, поэтому счётчик
@@ -932,28 +912,31 @@ struct ConnectionBadge: View {
     }
 }
 
-/// Портрет устройства. Рендеры лежат на прозрачном фоне, и чёрные наушники
-/// на тёмной теме сливались бы с ней — поэтому под картинкой семантическая
-/// подложка: она сама светлеет и темнеет вместе с системой, в отличие от
-/// любого подобранного цвета.
+/// Портрет устройства: системный значок по форме из таблицы опознания.
+/// Рендеров изделий у нас нет и быть не должно — они чужие, — а форма
+/// у нас есть, и накладные от затычек значком отличаются.
+///
+/// Подложка семантическая: она светлеет и темнеет вместе с системой,
+/// в отличие от любого подобранного цвета.
 struct DevicePortrait: View {
-    let artwork: NSImage?
+    /// Нет опознания — рисуем накладные: это самое узнаваемое из двух,
+    /// и пустое место было бы хуже неточности.
+    let form: NothingCatalog.FormFactor?
+
+    private var symbol: String {
+        switch form {
+        // `earbuds` появился в macOS 12, планка проекта 13 — можно.
+        case .earbuds: return "earbuds"
+        case .overEar, nil: return "headphones"
+        }
+    }
 
     var body: some View {
         ZStack {
             Circle().fill(.quaternary)
-            if let artwork {
-                Image(nsImage: artwork)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(5)
-            } else {
-                // Копии сайта нет или устройство не опознано — значок честнее
-                // пустого места.
-                Image(systemName: "headphones")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(.secondary)
-            }
+            Image(systemName: symbol)
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(.secondary)
         }
         .frame(width: 48, height: 48)
     }
@@ -963,13 +946,13 @@ struct DeviceHeader: View {
     let name: String?
     let status: DeviceLink.Status
     let charge: NothingProtocol.Battery.Reading?
-    let artwork: NSImage?
+    let form: NothingCatalog.FormFactor?
     let reconnect: () -> Void
 
     var body: some View {
         GlassPanel {
             HStack(spacing: 14) {
-                DevicePortrait(artwork: artwork)
+                DevicePortrait(form: form)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name ?? t("Nothing device"))
                         .font(.title3.weight(.semibold))
@@ -1682,7 +1665,7 @@ struct DeviceScreen: View {
             DeviceHeader(name: link.deviceName,
                          status: link.status,
                          charge: battery.readings.first,
-                         artwork: link.artwork,
+                         form: link.identity?.formFactor,
                          reconnect: reconnect)
                 .padding(.top, 12)
                 .padding(.horizontal, 20)

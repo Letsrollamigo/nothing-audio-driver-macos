@@ -688,18 +688,20 @@ public enum NothingCatalog {
 
     // MARK: - Опознание устройства
 
+    /// Как устройство носится. Единственное, ради чего форма нужна, — значок
+    /// на экране: чужих рендеров у нас нет и быть не должно, а рисовать всем
+    /// одни и те же наушники честнее, чем ничего.
+    public enum FormFactor: String {
+        /// Накладные. У донора это `deviceType == 6` минус шейный шнурок.
+        case overEar
+        /// Всё остальное: затычки, клипсы, открытые, шейный шнурок.
+        case earbuds
+    }
+
     /// Запись таблицы опознания. Канал опознания отдаёт семь байт, и последние
     /// три — ключ сюда. Одна модель встречается столько раз, сколько у неё
     /// цветов: отдельного поля цвета нет нигде, цвет — это то, какая запись
     /// совпала.
-    ///
-    /// `artwork` — основа имени файлов с рендерами: к ней дописывается
-    /// `_left`, `_right`, `_case`, `_duo` и `.webp`. Из `base` она НЕ выводится:
-    /// у двух записей картинки лежат под номером базы, а не альтернативы,
-    /// у остальных двенадцати наоборот. Поэтому хранится как есть.
-    ///
-    /// Сами файлы в репозиторий и бандл не входят и входить не должны — они
-    /// лежат в скачанной копии сайта на машине пользователя.
     public struct Identity {
         public let code: String
         public let name: String
@@ -707,74 +709,74 @@ public enum NothingCatalog {
         /// Второй возможный номер модели для того же железа. Чем именно
         /// выбирается один из двух, из кода донора не видно; не угадывать.
         public let altBase: String?
-        public let artwork: String
+        public let formFactor: FormFactor
     }
 
     /// 63 записей опознания.
     public static let identities: [Identity] = [
-        .init(code: "DEE8C0", name: "Ear (2)", base: "B155", altBase: nil, artwork: "b155_black"),
-        .init(code: "ACC520", name: "Ear (2)", base: "B155", altBase: nil, artwork: "b155_white"),
-        .init(code: "1016DD", name: "Ear (Stick)", base: "B157", altBase: nil, artwork: "b157_white"),
-        .init(code: "03464E", name: "Nothing Ear (a)", base: "B162", altBase: nil, artwork: "b162_black"),
-        .init(code: "5E3FBC", name: "Nothing Ear (a)", base: "B162", altBase: nil, artwork: "b162_white"),
-        .init(code: "8B6380", name: "Nothing Ear (a)", base: "B162", altBase: nil, artwork: "b162_yellow"),
-        .init(code: "C34F3B", name: "Nothing Ear (a)", base: "B162", altBase: "B183", artwork: "b183_black"),
-        .init(code: "404D6D", name: "Nothing Ear (a)", base: "B162", altBase: "B183", artwork: "b183_white"),
-        .init(code: "839E9A", name: "Nothing Ear (a)", base: "B162", altBase: "B183", artwork: "b183_yellow"),
-        .init(code: "ADD2C4", name: "Buds Pro", base: "B163", altBase: nil, artwork: "b163_black"),
-        .init(code: "5F8F82", name: "Buds Pro", base: "B163", altBase: nil, artwork: "b163_orange"),
-        .init(code: "2EB1CA", name: "Buds Pro", base: "B163", altBase: nil, artwork: "b163_white"),
-        .init(code: "AE35FD", name: "Neckband Pro", base: "B164", altBase: nil, artwork: "b164_black"),
-        .init(code: "4DFC4A", name: "Neckband Pro", base: "B164", altBase: nil, artwork: "b164_orange"),
-        .init(code: "26C190", name: "Neckband Pro", base: "B164", altBase: nil, artwork: "b164_white"),
-        .init(code: "150A27", name: "CMF Buds", base: "B168", altBase: nil, artwork: "b168_black"),
-        .init(code: "D35E18", name: "CMF Buds", base: "B168", altBase: nil, artwork: "b168_orange"),
-        .init(code: "ACCE54", name: "CMF Buds", base: "B168", altBase: nil, artwork: "b168_white"),
-        .init(code: "C19ECD", name: "Nothing Headphone (1)", base: "B170", altBase: nil, artwork: "b170_black"),
-        .init(code: "2D6FDA", name: "Nothing Headphone (1)", base: "B170", altBase: nil, artwork: "b170_grey"),
-        .init(code: "A20444", name: "Nothing Ear", base: "B171", altBase: nil, artwork: "b171_black"),
-        .init(code: "FEB1C7", name: "Nothing Ear", base: "B171", altBase: nil, artwork: "b171_white"),
-        .init(code: "F29566", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_black"),
-        .init(code: "2B353E", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_blue"),
-        .init(code: "A7B220", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_orange"),
-        .init(code: "CA36A6", name: "CMF Buds Pro 2", base: "B172", altBase: nil, artwork: "b172_white"),
-        .init(code: "2F45F5", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_black"),
-        .init(code: "0F1A4F", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_blue"),
-        .init(code: "1253C0", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_orange"),
-        .init(code: "E1BE45", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", artwork: "b187_white"),
-        .init(code: "7D46E5", name: "Nothing Ear (3)", base: "B173", altBase: "B201", artwork: "b173_black"),
-        .init(code: "C1EBFD", name: "Nothing Ear (3)", base: "B173", altBase: "B201", artwork: "b173_white"),
-        .init(code: "CC3444", name: "Nothing Ear (open)", base: "B174", altBase: nil, artwork: "b174_blue"),
-        .init(code: "FC3AAF", name: "Nothing Ear (open)", base: "B174", altBase: nil, artwork: "b174_white"),
-        .init(code: "1EFB39", name: "CMF Headphone Pro", base: "B175", altBase: nil, artwork: "b175_black"),
-        .init(code: "563DA5", name: "CMF Headphone Pro", base: "B175", altBase: nil, artwork: "b175_green"),
-        .init(code: "73C9EB", name: "CMF Headphone Pro", base: "B175", altBase: nil, artwork: "b175_white"),
-        .init(code: "19EF24", name: "CMF Buds 2", base: "B179", altBase: nil, artwork: "b179_black"),
-        .init(code: "FF2AB0", name: "CMF Buds 2", base: "B179", altBase: nil, artwork: "b179_green"),
-        .init(code: "D9AB5D", name: "CMF Buds 2", base: "B179", altBase: nil, artwork: "b179_orange"),
-        .init(code: "624011", name: "Nothing ear (1)", base: "B181", altBase: nil, artwork: "b181_black"),
-        .init(code: "31D53D", name: "Nothing ear (1)", base: "B181", altBase: nil, artwork: "b181_white"),
-        .init(code: "5C587F", name: "CMF Buds 2 Plus", base: "B184", altBase: nil, artwork: "b184_blue"),
-        .init(code: "4AEB6E", name: "CMF Buds 2 Plus", base: "B184", altBase: nil, artwork: "b184_white"),
-        .init(code: "70F8E3", name: "CMF Buds 2a", base: "B185", altBase: nil, artwork: "b185_black"),
-        .init(code: "509CAE", name: "CMF Buds 2a", base: "B185", altBase: nil, artwork: "b185_orange"),
-        .init(code: "ED5412", name: "CMF Buds 2a", base: "B185", altBase: nil, artwork: "b185_white"),
-        .init(code: "BFD53B", name: "Nothing Headphone (a)", base: "B186", altBase: nil, artwork: "b186_black"),
-        .init(code: "98D02B", name: "Nothing Headphone (a)", base: "B186", altBase: nil, artwork: "b186_pink"),
-        .init(code: "DE8953", name: "Nothing Headphone (a)", base: "B186", altBase: nil, artwork: "b186_white"),
-        .init(code: "6F6C71", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_black"),
-        .init(code: "A292C6", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_pink"),
-        .init(code: "810478", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_white"),
-        .init(code: "97EF75", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_yellow"),
-        .init(code: "79B3A9", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", artwork: "b198_yellow"),
-        .init(code: "DA1280", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_black"),
-        .init(code: "8F28ED", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_blue"),
-        .init(code: "E6673A", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_orange"),
-        .init(code: "DCD2CB", name: "CMF Clip Pro", base: "B189", altBase: nil, artwork: "b189_white"),
-        .init(code: "E9C3BE", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_black"),
-        .init(code: "148887", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_pink"),
-        .init(code: "7B2328", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_white"),
-        .init(code: "DB45D3", name: "Nothing Ear (3a)", base: "B190", altBase: nil, artwork: "b190_yellow"),
+        .init(code: "ACC520", name: "Ear (2)", base: "B155", altBase: nil, formFactor: .earbuds),
+        .init(code: "DEE8C0", name: "Ear (2)", base: "B155", altBase: nil, formFactor: .earbuds),
+        .init(code: "1016DD", name: "Ear (Stick)", base: "B157", altBase: nil, formFactor: .earbuds),
+        .init(code: "03464E", name: "Nothing Ear (a)", base: "B162", altBase: nil, formFactor: .earbuds),
+        .init(code: "404D6D", name: "Nothing Ear (a)", base: "B162", altBase: "B183", formFactor: .earbuds),
+        .init(code: "5E3FBC", name: "Nothing Ear (a)", base: "B162", altBase: nil, formFactor: .earbuds),
+        .init(code: "839E9A", name: "Nothing Ear (a)", base: "B162", altBase: "B183", formFactor: .earbuds),
+        .init(code: "8B6380", name: "Nothing Ear (a)", base: "B162", altBase: nil, formFactor: .earbuds),
+        .init(code: "C34F3B", name: "Nothing Ear (a)", base: "B162", altBase: "B183", formFactor: .earbuds),
+        .init(code: "2EB1CA", name: "Buds Pro", base: "B163", altBase: nil, formFactor: .earbuds),
+        .init(code: "5F8F82", name: "Buds Pro", base: "B163", altBase: nil, formFactor: .earbuds),
+        .init(code: "ADD2C4", name: "Buds Pro", base: "B163", altBase: nil, formFactor: .earbuds),
+        .init(code: "26C190", name: "Neckband Pro", base: "B164", altBase: nil, formFactor: .earbuds),
+        .init(code: "4DFC4A", name: "Neckband Pro", base: "B164", altBase: nil, formFactor: .earbuds),
+        .init(code: "AE35FD", name: "Neckband Pro", base: "B164", altBase: nil, formFactor: .earbuds),
+        .init(code: "150A27", name: "CMF Buds", base: "B168", altBase: nil, formFactor: .earbuds),
+        .init(code: "ACCE54", name: "CMF Buds", base: "B168", altBase: nil, formFactor: .earbuds),
+        .init(code: "D35E18", name: "CMF Buds", base: "B168", altBase: nil, formFactor: .earbuds),
+        .init(code: "2D6FDA", name: "Nothing Headphone (1)", base: "B170", altBase: nil, formFactor: .overEar),
+        .init(code: "C19ECD", name: "Nothing Headphone (1)", base: "B170", altBase: nil, formFactor: .overEar),
+        .init(code: "A20444", name: "Nothing Ear", base: "B171", altBase: nil, formFactor: .earbuds),
+        .init(code: "FEB1C7", name: "Nothing Ear", base: "B171", altBase: nil, formFactor: .earbuds),
+        .init(code: "0F1A4F", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", formFactor: .earbuds),
+        .init(code: "1253C0", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", formFactor: .earbuds),
+        .init(code: "2B353E", name: "CMF Buds Pro 2", base: "B172", altBase: nil, formFactor: .earbuds),
+        .init(code: "2F45F5", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", formFactor: .earbuds),
+        .init(code: "A7B220", name: "CMF Buds Pro 2", base: "B172", altBase: nil, formFactor: .earbuds),
+        .init(code: "CA36A6", name: "CMF Buds Pro 2", base: "B172", altBase: nil, formFactor: .earbuds),
+        .init(code: "E1BE45", name: "CMF Buds Pro 2", base: "B172", altBase: "B187", formFactor: .earbuds),
+        .init(code: "F29566", name: "CMF Buds Pro 2", base: "B172", altBase: nil, formFactor: .earbuds),
+        .init(code: "7D46E5", name: "Nothing Ear (3)", base: "B173", altBase: "B201", formFactor: .earbuds),
+        .init(code: "C1EBFD", name: "Nothing Ear (3)", base: "B173", altBase: "B201", formFactor: .earbuds),
+        .init(code: "CC3444", name: "Nothing Ear (open)", base: "B174", altBase: nil, formFactor: .earbuds),
+        .init(code: "FC3AAF", name: "Nothing Ear (open)", base: "B174", altBase: nil, formFactor: .earbuds),
+        .init(code: "1EFB39", name: "CMF Headphone Pro", base: "B175", altBase: nil, formFactor: .overEar),
+        .init(code: "563DA5", name: "CMF Headphone Pro", base: "B175", altBase: nil, formFactor: .overEar),
+        .init(code: "73C9EB", name: "CMF Headphone Pro", base: "B175", altBase: nil, formFactor: .overEar),
+        .init(code: "19EF24", name: "CMF Buds 2", base: "B179", altBase: nil, formFactor: .earbuds),
+        .init(code: "D9AB5D", name: "CMF Buds 2", base: "B179", altBase: nil, formFactor: .earbuds),
+        .init(code: "FF2AB0", name: "CMF Buds 2", base: "B179", altBase: nil, formFactor: .earbuds),
+        .init(code: "31D53D", name: "Nothing ear (1)", base: "B181", altBase: nil, formFactor: .earbuds),
+        .init(code: "624011", name: "Nothing ear (1)", base: "B181", altBase: nil, formFactor: .earbuds),
+        .init(code: "4AEB6E", name: "CMF Buds 2 Plus", base: "B184", altBase: nil, formFactor: .earbuds),
+        .init(code: "5C587F", name: "CMF Buds 2 Plus", base: "B184", altBase: nil, formFactor: .earbuds),
+        .init(code: "509CAE", name: "CMF Buds 2a", base: "B185", altBase: nil, formFactor: .earbuds),
+        .init(code: "70F8E3", name: "CMF Buds 2a", base: "B185", altBase: nil, formFactor: .earbuds),
+        .init(code: "ED5412", name: "CMF Buds 2a", base: "B185", altBase: nil, formFactor: .earbuds),
+        .init(code: "6F6C71", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", formFactor: .overEar),
+        .init(code: "79B3A9", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", formFactor: .overEar),
+        .init(code: "810478", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", formFactor: .overEar),
+        .init(code: "97EF75", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", formFactor: .overEar),
+        .init(code: "98D02B", name: "Nothing Headphone (a)", base: "B186", altBase: nil, formFactor: .overEar),
+        .init(code: "A292C6", name: "Nothing Headphone (a)", base: "B186", altBase: "B198", formFactor: .overEar),
+        .init(code: "BFD53B", name: "Nothing Headphone (a)", base: "B186", altBase: nil, formFactor: .overEar),
+        .init(code: "DE8953", name: "Nothing Headphone (a)", base: "B186", altBase: nil, formFactor: .overEar),
+        .init(code: "8F28ED", name: "CMF Clip Pro", base: "B189", altBase: nil, formFactor: .earbuds),
+        .init(code: "DA1280", name: "CMF Clip Pro", base: "B189", altBase: nil, formFactor: .earbuds),
+        .init(code: "DCD2CB", name: "CMF Clip Pro", base: "B189", altBase: nil, formFactor: .earbuds),
+        .init(code: "E6673A", name: "CMF Clip Pro", base: "B189", altBase: nil, formFactor: .earbuds),
+        .init(code: "148887", name: "Nothing Ear (3a)", base: "B190", altBase: nil, formFactor: .earbuds),
+        .init(code: "7B2328", name: "Nothing Ear (3a)", base: "B190", altBase: nil, formFactor: .earbuds),
+        .init(code: "DB45D3", name: "Nothing Ear (3a)", base: "B190", altBase: nil, formFactor: .earbuds),
+        .init(code: "E9C3BE", name: "Nothing Ear (3a)", base: "B190", altBase: nil, formFactor: .earbuds),
     ]
 
     /// Опознание по семи байтам канала опознания: ключ — последние три,

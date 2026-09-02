@@ -596,8 +596,8 @@ struct ProtocolTest {
         let mine = NothingCatalog.identity(fastpair: bytes("03010003c19ecd"))
         check(mine?.base == "B170", "опознание 03010003c19ecd даёт B170",
               mine?.base ?? "не нашлось")
-        check(mine?.artwork == "b170_black", "и чёрный цвет — цвет кодируется самой записью",
-              mine?.artwork ?? "—")
+        check(mine?.formFactor == .overEar, "и накладную форму",
+              mine?.formFactor.rawValue ?? "—")
         check(NothingCatalog.identity(fastpair: bytes("0301"))?.base == nil,
               "коротким байтам опознания соответствия нет, и разбор не падает")
 
@@ -620,18 +620,18 @@ struct ProtocolTest {
         check(Set(ids.compactMap(\.altBase)) == ["B183", "B187", "B198", "B201"],
               "через altBase достижимы ровно четыре модели")
 
-        // Основа имени картинок из базы НЕ выводится. У B173 картинки лежат
-        // под номером базы, хотя altBase у неё B201, — а у прочих записей
-        // с альтернативой наоборот. Проверка держит соблазн «оптимизировать»
-        // хранение основы обратно в правило.
-        let b173 = ids.first { $0.base == "B173" && $0.altBase == "B201" }
-        check(b173?.artwork.hasPrefix("b173") == true,
-              "у B173 картинки под номером базы, а не альтернативы",
-              b173?.artwork ?? "—")
-        let b183 = ids.first { $0.altBase == "B183" }
-        check(b183?.artwork.hasPrefix("b183") == true,
-              "а у B162 с альтернативой B183 — наоборот, под номером альтернативы",
-              b183?.artwork ?? "—")
+        // Форма выведена из имени изделия, а не из флага `deviceType`.
+        // Соблазн вернуться к флагу есть — он почти совпадает, — но среди
+        // его пяти моделей есть B164, шейный шнурок CMF Neckband Pro,
+        // и накладными он не является.
+        check(ids.first { $0.base == "B164" }?.formFactor == .earbuds,
+              "шейный шнурок B164 накладными не считается",
+              ids.first { $0.base == "B164" }?.formFactor.rawValue ?? "—")
+        let mismatched = ids.filter {
+            $0.name.contains("Headphone") != ($0.formFactor == .overEar)
+        }
+        check(mismatched.isEmpty, "накладные — ровно те, у кого в имени Headphone",
+              mismatched.map(\.name).joined(separator: " "))
     }
 
     /// Раскладка жестов по моделям. Строится по конфигу устройства, а сверяется
