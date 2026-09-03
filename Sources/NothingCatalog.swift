@@ -296,7 +296,7 @@ public enum NothingCatalog {
     /// Чем модель управляет звучанием. Наборы дополняют друг друга: ни одна
     /// модель не знает оба.
     public enum SoundStyle: Equatable {
-        /// Пресеты эквалайзера, команда `0xF01F`.
+        /// Пресеты эквалайзера: чтение `0xC01F`, запись `0xF010`.
         case presets([NothingProtocol.EqualiserPreset])
         /// Профили звучания, команда `0xF01D`.
         case profiles([SoundProfile])
