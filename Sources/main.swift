@@ -229,6 +229,19 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
     /// Шим шлёт гекс — разбираем на границе и дальше живём байтами.
     func write(hex: String) { write(hexBytes(hex)) }
 
+    /// Очередь для одного-единственного вызова — `writeSync`. Он блокирующий,
+    /// и на полуоткрытом канале блокируется ровно на 75 секунд: устройство
+    /// не освободило сеанс, `openComplete` отрапортовал успех, а записи уходят
+    /// в никуда (воспроизведено дважды 03.09.2026). С главного потока это
+    /// значит замерший на 75 секунд интерфейс.
+    ///
+    /// Правило «логику подключения не трогать» нарушено осознанно, второй раз.
+    /// Обоснование: на свою очередь вынесен ТОЛЬКО блокирующий вызов. Ни одно
+    /// решение с главного потока не ушло — проверка канала, очередь, обрыв
+    /// и восстановление остались там же, где были, и в том же порядке.
+    /// Очередь последовательная, поэтому порядок кадров сохраняется.
+    private let writeQueue = DispatchQueue(label: "local.ear-local.write")
+
     func write(_ bytes: [UInt8]) {
         guard isOpen, let ch = channel else {
             // Устройство закрывает канал на простое: копим кадр и переоткрываем.
@@ -237,8 +250,24 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             if !opening { channel = nil; open(uuidString: lastUUID) }
             return
         }
-        var buf = bytes
-        let rc = ch.writeSync(&buf, length: UInt16(buf.count))
+        dispatch(bytes, on: ch)
+    }
+
+    /// Отдать кадр каналу и вернуться. Решение по результату принимается
+    /// на главном потоке — здесь только сам вызов.
+    private func dispatch(_ bytes: [UInt8], on ch: IOBluetoothRFCOMMChannel) {
+        writeQueue.async { [weak self] in
+            var buf = bytes
+            let rc = ch.writeSync(&buf, length: UInt16(buf.count))
+            DispatchQueue.main.async { self?.wrote(bytes, on: ch, rc) }
+        }
+    }
+
+    /// Результат записи. Канал сверяется с текущим: пока кадр был в пути,
+    /// его могли закрыть и заменить, и хоронить живой канал из-за отказа
+    /// на мёртвом нельзя. Без этой проверки четыре кадра залпа, упавшие
+    /// на одном обрыве, дали бы четыре восстановления подряд.
+    private func wrote(_ bytes: [UInt8], on ch: IOBluetoothRFCOMMChannel, _ rc: IOReturn) {
         if rc == kIOReturnSuccess {
             // Запись `0xF01B` несёт MAC-адрес чужого устройства пользователя —
             // ровно то же, что и ответ `0x4028`, только в другую сторону.
@@ -248,13 +277,20 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             } else {
                 trace("→ \(hexString(bytes))")
             }
+            return
         }
-        if rc != kIOReturnSuccess {
-            trace("write: ошибка \(rc), кадр в очередь, переподключаюсь")
-            enqueue(bytes)
-            ch.close()          // иначе объект остаётся делегатом и его колбэк отбросит guard
-            handleLostChannel()
+        guard ch === channel else {
+            trace("write: ошибка \(rc) на постороннем канале")
+            // Кадр имеет смысл вернуть в очередь, только если мы уже
+            // восстанавливаемся: после нашего собственного закрытия очередь
+            // очищена намеренно, и класть туда обратно нечего.
+            if reconnecting { enqueue(bytes) }
+            return
         }
+        trace("write: ошибка \(rc), кадр в очередь, переподключаюсь")
+        enqueue(bytes)
+        ch.close()          // иначе объект остаётся делегатом и его колбэк отбросит guard
+        handleLostChannel()
     }
 
     private static let outboxLimit = 32
@@ -277,13 +313,13 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
             if item.uuid == lastUUID && now.timeIntervalSince(item.at) <= Self.frameTTL { acc.0.append(item) } else { acc.1 += 1 }
         }
         outbox.removeAll()
-        var sent = 0
-        for item in fresh {
-            var frame = item.frame
-            if ch.writeSync(&frame, length: UInt16(frame.count)) == kIOReturnSuccess { sent += 1 }
-            else { trace("flush: кадр не ушёл") }
-        }
-        trace("flush: отправлено \(sent), отброшено устаревших/чужих \(stale)")
+        // Через ту же очередь, а не через `write`: так у записи ровно два
+        // входа и один разбор результата, и не надо доказывать, что цепочка
+        // «запись → открытие → досылка → запись» когда-нибудь кончается.
+        for item in fresh { dispatch(item.frame, on: ch) }
+        // Счётчик отправленных отсюда больше не виден — результат придёт
+        // позже и разберётся в `wrote`, который сам и сообщит о неудаче.
+        trace("flush: отдано каналу \(fresh.count), отброшено устаревших/чужих \(stale)")
     }
 
     func close() {
@@ -298,6 +334,12 @@ final class SerialBridge: NSObject, IOBluetoothRFCOMMChannelDelegate {
         // сообщает — `openComplete` там молча уходит в ветку reconnecting.
         // Наше собственное закрытие обрывом не является, и после обнуления
         // тот же колбэк честно опознаётся как посторонний.
+        // Дождаться кадров, уже отданных каналу. На здоровом канале это
+        // микросекунды; на полуоткрытом — те же 75 секунд, что и раньше,
+        // и это не ухудшение: до выноса записи на очередь столько же висел
+        // сам вызов. Ждать надо: последним кадром перед выходом уходит
+        // остановка звона, и терять его нельзя.
+        writeQueue.sync {}
         let closing = channel
         channel = nil
         closing?.close()
