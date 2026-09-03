@@ -1827,6 +1827,7 @@ final class NativeWindow: NSObject, NSWindowDelegate {
     /// и наблюдать хранилище так, как это делают представления, он не умеет.
     /// Единственное место в проекте, где реактивность видна снаружи SwiftUI.
     private var cancellables = Set<AnyCancellable>()
+    private var batteryPoll: Timer?
 
     override init() {
         listening = ListeningStore(link: link)
@@ -1950,9 +1951,7 @@ final class NativeWindow: NSObject, NSWindowDelegate {
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
 
-        // Заряд у значка — последний прочитанный. Периодического опроса нет
-        // намеренно: push-событий у B170 нет (проверено 02.09), а частый
-        // опрос грел бы канал ради числа, которое меняется раз в час.
+        // Заряд у значка — последний прочитанный.
         battery.$readings
             .receive(on: RunLoop.main)
             .sink { [weak self] readings in
@@ -1960,6 +1959,25 @@ final class NativeWindow: NSObject, NSWindowDelegate {
                     readings.first.map { " \($0.percent)%" } ?? ""
             }
             .store(in: &cancellables)
+
+        startBatteryPoll()
+    }
+
+    /// Опрос заряда. Push-событий у наушников нет — проверено на B170
+    /// 02.09.2026, — поэтому без опроса число в значке застывает на том,
+    /// что пришло при подключении, и живёт так до переподключения.
+    ///
+    /// Пять минут: заряд меняется на процент за десятки минут, а вопрос
+    /// стоит восьми байт. Побочное следствие названо вслух — канал больше
+    /// не простаивает пять минут подряд, так что обрыв по простою и молчаливое
+    /// восстановление теперь случаются заметно реже. Путь этот не убран
+    /// и продолжает работать: разрывает канал не только простой.
+    private func startBatteryPoll() {
+        batteryPoll?.invalidate()
+        batteryPoll = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            guard let self, self.link.status == .ready else { return }
+            self.link.request(.battery)
+        }
     }
 
     @objc private func statusClicked() {
@@ -2101,6 +2119,7 @@ final class NativeWindow: NSObject, NSWindowDelegate {
     /// его одной программе за раз, и не отпустив, мы оставим наушники
     /// недоступными для всех остальных до перезагрузки Bluetooth.
     func shutdown() {
+        batteryPoll?.invalidate()
         // Оставить звенящие наушники после выхода — самое обидное, что можно
         // сделать: остановить их будет уже нечем.
         if let ringing = deviceSettings.ringing { deviceSettings.ring(ringing, false) }
