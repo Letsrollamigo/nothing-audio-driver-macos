@@ -160,7 +160,7 @@ public enum NothingCatalog {
         .init(code: 0xF01C, name: "highQualityAudio", role: .write, requires: .flag(.highQualityAudio), evidence: .wire),
         .init(code: 0xF01D, name: "listeningMode", role: .write, requires: .onlyModels(["B168", "B172", "B175", "B179", "B184", "B185", "B189"]), evidence: .derived),
         .init(code: 0xF040, name: "latency", role: .write, requires: .always, evidence: .wire),
-        .init(code: 0xF041, name: "customEQ", role: .write, requires: .exceptModels(["B181"]), evidence: .derived),
+        .init(code: 0xF041, name: "customEQ", role: .write, requires: .exceptModels(["B181"]), evidence: .wire),
         .init(code: 0xF04F, name: "advancedEQEnabled", role: .write, requires: .always, evidence: .derived),
         .init(code: 0xF050, name: "advancedEQValue", role: .write, requires: .always, evidence: .wire),
         .init(code: 0xF051, name: "enhancedBass", role: .write, requires: .onlyModels(["B162", "B164", "B168", "B170", "B171", "B172", "B173", "B179", "B184", "B186", "B189"]), evidence: .wire),
