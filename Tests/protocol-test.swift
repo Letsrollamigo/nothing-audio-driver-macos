@@ -508,6 +508,42 @@ struct ProtocolTest {
         check(!NothingCatalog.supports(NothingCatalog.byCode[0xF01D]!, model: b170, firmware: fw),
               "B170 режим прослушивания не пишет — у него пресеты")
 
+        // --- набор звучания, которым экран рисует контрол.
+        // Два независимых куска чужого кода должны сойтись: гейт команды
+        // `0xF01D` (жёсткий список моделей в `setListeningMode`) и набор
+        // кнопок на странице модели, из которого собран `SoundStyle`.
+        // Разойдутся — экран покажет один контрол, а писать будет другой.
+        let styleMismatch = NothingCatalog.models.map(\.id).filter { id in
+            let profiled: Bool
+            if case .profiles = NothingCatalog.sound(model: id) { profiled = true } else { profiled = false }
+            return profiled != NothingCatalog.supports(NothingCatalog.byCode[0xF01D]!,
+                                                       model: id, firmware: fw)
+        }
+        check(styleMismatch.isEmpty,
+              "профили в наборе звучания ровно у тех моделей, что пишут 0xF01D",
+              styleMismatch.joined(separator: " "))
+
+        // --- запись профиля. Устройства с профилями у нас нет, и сверить
+        // кадр с проводом нечем; единственная доступная опора — донорский
+        // код, где `setListeningMode` отличается от `setEQ` только номером
+        // команды. Проверяем ровно это на одинаковом значении: `.bass` и
+        // профиль оба кодируются тройкой. Отличаться позволено двум байтам
+        // команды и контрольной сумме, которая от них считается.
+        let asPreset = NothingProtocol.encodeSetEqualiser(.bass, operationID: 9)
+        let asProfile = NothingProtocol.encodeSetSoundProfile(3, operationID: 9)
+        let tail = asPreset.count - 2
+        check(asPreset.count == asProfile.count
+                && zip(asPreset, asProfile).enumerated().allSatisfy {
+                    $0.offset == 3 || $0.offset == 4 || $0.offset >= tail
+                        || $0.element.0 == $0.element.1
+                },
+              "кадр профиля отличается от кадра пресета только номером команды",
+              asProfile.map { String(format: "%02x", $0) }.joined())
+        check(NothingProtocol.parseSoundProfile(
+                try! NothingProtocol.decode(NothingProtocol.encode(
+                    .init(command: 0x4050, operationID: 1, payload: [0x03])))) == 3,
+              "профиль читается первым байтом ответа 0x4050")
+
         // В конфиге есть поле supportId, указывающее одну модель на другую, и
         // соблазн трактовать его как «возможности берутся оттуда» большой.
         // Сайт этого поля не читает нигде — проверено поиском по всем файлам, —

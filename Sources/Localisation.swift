@@ -131,6 +131,13 @@ extension Strings {
         "More Treble": "Больше высоких",
         "More Bass": "Больше баса",
         "Custom": "Свой",
+        "Sound profile": "Профиль звучания",
+        "Profile": "Профиль",
+        "Rock": "Рок",
+        "Electronic": "Электронная",
+        "Pop": "Поп",
+        "Vocals": "Вокал",
+        "Classical": "Классика",
         "Advanced EQ is active on the headphones — picking a preset switches it off.":
             "На наушниках включён расширенный эквалайзер — выбор пресета его выключит.",
         "Applying…": "Применяю…",

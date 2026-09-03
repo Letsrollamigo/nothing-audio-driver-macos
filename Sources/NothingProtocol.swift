@@ -129,6 +129,8 @@ public enum NothingProtocol {
 
         case setANC               = 0xF00F
         case setEqualiser         = 0xF010
+        case listeningMode        = 0xC050
+        case setListeningMode     = 0xF01D
         case customEQ             = 0xC044
         case advancedEQValue      = 0xC04D
 
@@ -315,6 +317,26 @@ public enum NothingProtocol {
         encode(Frame(command: Command.setEqualiser.rawValue,
                      operationID: operationID,
                      payload: [preset.rawValue, 0x00]))
+    }
+
+    /// Профиль звучания, ответ `0x4050`. Отдельная от пресета команда, но
+    /// раскладка та же: значение в первом байте. У донора обе, `0x401F` и
+    /// `0x4050`, разбираются одной функцией `readEQ`, и обе берут байт по
+    /// одному смещению (`bluetooth_socket.js`, `readEQ`).
+    ///
+    /// Возвращается сырым числом: имена профилей знает каталог, а кодек
+    /// умеет байты и про модели не знает ничего.
+    public static func parseSoundProfile(_ frame: Frame) -> UInt8? {
+        frame.payload.first
+    }
+
+    /// Запись `0xF01D`: `[профиль, 0x00]` — байт в байт та же раскладка, что
+    /// у пресета, и у донора это буквально та же функция с другим номером
+    /// (`setListeningMode` против `setEQ`).
+    public static func encodeSetSoundProfile(_ profile: UInt8, operationID: UInt8) -> [UInt8] {
+        encode(Frame(command: Command.setListeningMode.rawValue,
+                     operationID: operationID,
+                     payload: [profile, 0x00]))
     }
 
     /// Ответы, состоящие из одного значения: `0x404C` продвинутый эквалайзер,

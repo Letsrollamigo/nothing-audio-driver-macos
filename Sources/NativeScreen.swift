@@ -319,6 +319,15 @@ final class ListeningStore: ObservableObject {
 final class SoundStore: ObservableObject {
     @Published private(set) var preset: NothingProtocol.EqualiserPreset?
     @Published private(set) var pendingPreset: NothingProtocol.EqualiserPreset?
+    /// Чем эта модель управляет звучанием. До ответа каталога — полный набор
+    /// пресетов: ровно то, что экран показывал раньше. Опознание одноразовое
+    /// и промахивается, и терять из-за промаха весь контрол нельзя.
+    @Published var style: NothingCatalog.SoundStyle =
+        .presets(NothingProtocol.EqualiserPreset.allCases)
+    /// Профиль звучания — второе семейство, у семи моделей вместо пресетов.
+    /// Команда своя (`0xF01D`), а раскладка байтов та же.
+    @Published private(set) var profile: NothingCatalog.SoundProfile?
+    @Published private(set) var pendingProfile: NothingCatalog.SoundProfile?
     /// Продвинутый эквалайзер активен: пресеты в этот момент не действуют,
     /// и показывать один из них выбранным было бы враньём.
     @Published private(set) var advancedOn = false
@@ -374,6 +383,15 @@ final class SoundStore: ObservableObject {
         // это и есть выход из продвинутого режима, других выходов у донора нет.
         link.send(NothingProtocol.encodeSetAdvancedEQEnabled(false, operationID: link.nextOperationID()))
         link.send(NothingProtocol.encodeSetEqualiser(preset, operationID: link.nextOperationID()))
+    }
+
+    /// Выбрать профиль звучания. Продвинутый эквалайзер тут НЕ выключается
+    /// перед записью, в отличие от пресета: у донора на странице профилей
+    /// такого шага нет, а у моделей с профилями нет и флага `advancedEq`.
+    func setProfile(_ profile: NothingCatalog.SoundProfile) {
+        pendingProfile = profile
+        link.send(NothingProtocol.encodeSetSoundProfile(profile.rawValue,
+                                                        operationID: link.nextOperationID()))
     }
 
     /// Спросить кривую. Профиль `255` — «текущий», как спрашивает донор;
@@ -435,6 +453,11 @@ final class SoundStore: ObservableObject {
         case 0x401F:
             preset = NothingProtocol.parseEqualiser(frame)
             pendingPreset = nil
+        case 0x701D: link.request(.listeningMode)
+        case 0x4050:
+            profile = NothingProtocol.parseSoundProfile(frame)
+                .flatMap(NothingCatalog.SoundProfile.init(rawValue:))
+            pendingProfile = nil
         case 0x404C:
             advancedOn = NothingProtocol.parseSingleValue(frame) == 1
         case 0x404E:
@@ -770,6 +793,21 @@ private func title(_ strength: NothingProtocol.NoiseStrength) -> String {
     }
 }
 
+/// Подписи профилей звучания. `dirac` и `diracOpteo` — не опечатка: у B185
+/// это профиль Dirac под номером 7, у остальных Dirac OPTEO под нулём.
+private func title(_ profile: NothingCatalog.SoundProfile) -> String {
+    switch profile {
+    case .diracOpteo: return "Dirac OPTEO"
+    case .rock:       return "Rock"
+    case .electronic: return "Electronic"
+    case .pop:        return "Pop"
+    case .vocals:     return "Vocals"
+    case .classical:  return "Classical"
+    case .custom:     return "Custom"
+    case .dirac:      return "Dirac"
+    }
+}
+
 /// Пояснение под переключателем: у Nothing одно значение кодирует и режим,
 /// и силу шумоподавления, и по названию это не очевидно.
 private func caption(_ mode: NothingProtocol.ListeningMode) -> String {
@@ -1069,14 +1107,33 @@ struct ListeningSection: View {
     }
 }
 
+/// Набор звучания. Два семейства, и ни одна модель не знает оба: пресеты
+/// эквалайзера (`0xF010`) или профили звучания (`0xF01D`). Какое из них
+/// у модели — говорит каталог; выбирать по числу кнопок или по флагу `eq`
+/// нельзя, у десяти моделей флага нет вовсе.
 struct EqualiserSection: View {
+    let style: NothingCatalog.SoundStyle
     let preset: NothingProtocol.EqualiserPreset?
     let pending: NothingProtocol.EqualiserPreset?
+    let profile: NothingCatalog.SoundProfile?
+    let pendingProfile: NothingCatalog.SoundProfile?
     let advancedOn: Bool
     let enabled: Bool
     let select: (NothingProtocol.EqualiserPreset) -> Void
+    let selectProfile: (NothingCatalog.SoundProfile) -> Void
 
+    @ViewBuilder
     var body: some View {
+        switch style {
+        case .presets(let list): presets(list)
+        case .profiles(let list): profiles(list)
+        // Ни пресетов, ни профилей. Так вышло у одной модели, B187: своей
+        // страницы у неё нет, набор кнопок пуст, и рисовать нечего.
+        case .neither: EmptyView()
+        }
+    }
+
+    private func presets(_ list: [NothingProtocol.EqualiserPreset]) -> some View {
         Section(t("Equaliser")) {
             // При активном продвинутом эквалайзере не выбрано ничего:
             // устройство в этот момент играет по кривой, а не по пресету,
@@ -1084,7 +1141,7 @@ struct EqualiserSection: View {
             Picker(t("Preset"), selection: Binding<NothingProtocol.EqualiserPreset?>(
                 get: { pending ?? (advancedOn ? nil : preset) },
                 set: { if let value = $0 { select(value) } })) {
-                ForEach(NothingProtocol.EqualiserPreset.allCases, id: \.self) { value in
+                ForEach(list, id: \.self) { value in
                     Text(t(title(value))).tag(Optional(value))
                 }
             }
@@ -1097,6 +1154,28 @@ struct EqualiserSection: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else if pending != nil && pending != preset {
+                Text(t("Applying…"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Профилей бывает семь, и подписи у них длинные — сегментами такое
+    /// не показать, поэтому список. Проверить вёрстку не на чем: моделей
+    /// с профилями у нас нет, а список не переполнить в принципе.
+    private func profiles(_ list: [NothingCatalog.SoundProfile]) -> some View {
+        Section(t("Sound profile")) {
+            Picker(t("Profile"), selection: Binding<NothingCatalog.SoundProfile?>(
+                get: { pendingProfile ?? profile },
+                set: { if let value = $0 { selectProfile(value) } })) {
+                ForEach(list, id: \.self) { value in
+                    Text(t(title(value))).tag(Optional(value))
+                }
+            }
+            .disabled(!enabled)
+
+            if pendingProfile != nil && pendingProfile != profile {
                 Text(t("Applying…"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -1757,12 +1836,18 @@ struct DeviceScreen: View {
     /// Вкладка «Звук», левая половина: то, что выбирают, а не настраивают.
     @ViewBuilder
     private var soundTab: some View {
-        if sound.preset != nil || sound.advancedOn {
-            EqualiserSection(preset: sound.preset,
+        // Секция открывается ответом устройства — пресетом или профилем,
+        // смотря какое семейство у модели.
+        if sound.preset != nil || sound.profile != nil || sound.advancedOn {
+            EqualiserSection(style: sound.style,
+                             preset: sound.preset,
                              pending: sound.pendingPreset,
+                             profile: sound.profile,
+                             pendingProfile: sound.pendingProfile,
                              advancedOn: sound.advancedOn,
                              enabled: link.status == .ready,
-                             select: sound.setPreset)
+                             select: sound.setPreset,
+                             selectProfile: sound.setProfile)
         }
         if let bass = sound.bass {
             BassSection(bass: bass,
@@ -1903,6 +1988,7 @@ final class NativeWindow: NSObject, NSWindowDelegate {
         listening.strengths = NothingCatalog.noiseStrengths(model: model, firmware: firmware)
         listening.hasTransparency = NothingCatalog.hasTransparency(model: model, firmware: firmware)
         sound.spatialModes = NothingCatalog.spatialModes(model: model, firmware: firmware)
+        sound.style = NothingCatalog.sound(model: model)
         deviceSettings.codecs = NothingCatalog.codecs(model: model, firmware: firmware)
         deviceSettings.dualReboots =
             NothingCatalog.flags(model: model, firmware: firmware)[.dualConnectionReboot] == 1
@@ -1922,7 +2008,8 @@ final class NativeWindow: NSObject, NSWindowDelegate {
            let command = NothingProtocol.Command(rawValue: read) {
             link.request(command)
         }
-        for command: NothingProtocol.Command in [.equaliser, .advancedEQEnabled,
+        for command: NothingProtocol.Command in [.equaliser, .listeningMode,
+                                                 .advancedEQEnabled,
                                                  .bassEnhance, .spatialAudio,
                                                  .inEarDetection, .latencyMode,
                                                  .highQualityAudio, .dualConnectEnabled] {
