@@ -72,7 +72,7 @@ That is the whole build. No package manager, no Xcode project, no dependencies â
 | Command | What it does |
 |---|---|
 | `./build.sh` | Build into `build/` |
-| `./build.sh --test` | 210 checks of the protocol and the path rules; no hardware needed |
+| `./build.sh --test` | 213 checks of the protocol and the path rules; no hardware needed |
 | `./build.sh --install` | Build and copy into `/Applications` |
 | `SITE_SRC=/path/to/site ./build.sh` | Bundle a copy of the web interface you already have, for `--web` |
 | `SITE_SRC=none ./build.sh` | Build without one (the default when nothing is found) |

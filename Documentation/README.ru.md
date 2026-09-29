@@ -63,7 +63,7 @@ open "build/Unofficial driver for Nothing audio devices.app"
 | Команда | Что делает |
 |---|---|
 | `./build.sh` | Собрать в `build/` |
-| `./build.sh --test` | 210 проверок протокола и правил путей, железо не нужно |
+| `./build.sh --test` | 213 проверок протокола и правил путей, железо не нужно |
 | `./build.sh --install` | Собрать и положить в `/Applications` |
 | `SITE_SRC=/путь/к/site ./build.sh` | Вшить копию веб-интерфейса, которая у вас уже есть, — для `--web` |
 | `SITE_SRC=none ./build.sh` | Собрать без неё (так же по умолчанию, если копии не нашлось) |
